@@ -1,0 +1,17 @@
+{
+  "name": "live-translate-extension",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Live audio translation and in-player captions for YouTube.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xieyuanqing/live-translate-extension.git"
+  },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "check": "node tools/check.js",
+    "test": "node tools/selftest.js && node --test tools/lifecycle.test.js",
+    "package": "node tools/package.js"
+  }
+}

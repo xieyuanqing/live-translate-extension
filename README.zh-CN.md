@@ -1,0 +1,103 @@
+# 流译 · YouTube 实时翻译
+
+[English](README.md) · [简体中文](README.zh-CN.md)
+
+抓取 YouTube 播放器的音频，使用自己的 Gemini API Key 实时翻译，字幕直接显示在播放器里，原声照常播放。
+
+**当前版本：0.1.1。** 本仓库是独立的 Chrome Manifest V3 扩展，界面目前为简体中文。暂时使用手动安装，尚未上架浏览器扩展商店。
+
+## 功能
+
+- 字幕叠在播放器内，随全屏、剧场模式和窗口大小变化。
+- 直播页可自动开始，也可以通过弹窗或 `Alt+T` 启停。
+- 单独选择源语言、目标语言和可编辑的场景提示词。
+- 可选注入标题、频道、简介，以及用户补充的背景资料，辅助识别人名和主题。
+- 播放器暂停、静音或检测到广告时，暂停提交音频。
+
+主要面向 YouTube 直播，翻译的是**音频**，不读取已有 CC 字幕轨做文本翻译。普通视频可以手动开始。
+
+## 安装
+
+1. 在 [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) 下载 `live-translate-extension-0.1.1.zip`。
+2. 解压到一个固定目录，安装后保留该目录。
+3. 打开 `chrome://extensions/`，开启「开发者模式」。
+4. 点「加载已解压的扩展程序」，选择包含 `manifest.json` 的文件夹。
+5. 刷新已经打开的 YouTube 页面。
+
+也可以克隆本仓库，直接加载仓库根目录。使用插件不需要安装 Node.js、Android 工具，也没有编译步骤。
+
+更新时，用新版文件替换**同一个安装目录**中的文件，在扩展管理页重新加载，再刷新 YouTube。不同的解压目录或商店安装可能对应不同的扩展 ID，本地设置不会自动迁移。
+
+## 首次配置
+
+1. 打开插件弹窗 →「设置」，填自己的 Gemini API Key。可在 [Google AI Studio](https://aistudio.google.com/apikey) 创建，Key 必须能访问当前配置的 Live Translate 模型。
+2. 确认浏览器能连接 `generativelanguage.googleapis.com`，或者配置兼容的 WSS 反代。
+3. 选择翻译方向，默认是日语 → 中文。
+4. 打开直播页。配置 Key 后默认自动开始，可在设置中关闭。
+
+当前使用 `gemini-3.5-live-translate-preview`。可用性和费用由你的 Gemini 权限与服务计划决定，安装插件不包含 API 额度。
+
+## 日常使用
+
+| 操作 | 作用 |
+| --- | --- |
+| 开始 / 停止，或 `Alt+T` | 控制当前标签页的翻译，原声继续播放 |
+| 听什么 / 翻译成 | 独立选择源语言和目标语言 |
+| 场景 | 选择 VTuber、游戏、通用直播等可编辑提示词 |
+| 本场补充 | 补人名、当前游戏、活动等信息；换视频或刷新后清空 |
+| 应用当前设置并重新开始 | 一键应用更新的语言、场景和背景 |
+| 设置 → 字幕外观 | 字号、位置、背景和行数即时生效 |
+
+开始时冻结本场配置，断线重连和定时轮换继续使用同一份快照。运行中修改翻译相关设置，要重新开始才生效。临时补充输入后立即传到页面内存，关掉弹窗不会丢字。
+
+场景提示词是可复用偏好，长期背景每场都会带上，本场补充只属于当前视频，三者用途不同。
+
+## 数据与凭据
+
+没有项目方运营的后端，但**翻译不是离线进行**：音频和启用的背景资料会直接发送给 Gemini，或经过你配置的反代。
+
+API Key、设置、场景与长期背景存在 `chrome.storage.local`，Key 当前**没有应用层加密**。本场补充和字幕只在页面内存中，插件不保存录音或字幕文件。
+
+使用自己的 Key，并在信任的电脑上使用。不要把 Key 写进源码、Issue、截图或安装包。自定义反代会接收经由它的请求，包括 API Key。Google 对提交内容的处理依适用的 Gemini 服务条款而定，本项目不能承诺上游永不保留数据。
+
+商店分发、首次使用同意流程和正式隐私披露留到后续单独处理。
+
+## 排查与限制
+
+| 现象 | 建议 |
+| --- | --- |
+| 页面尚未连接 | 安装或更新后刷新 YouTube；弹窗提供刷新按钮 |
+| 无法连接 Gemini | 检查 Key、模型权限、网络与反代地址 |
+| 连接正常但没有字幕 | 确认正在播放语音、播放器未静音，观察输入音量；静音时没有译文是正常的 |
+| 与 YouTube CC 重叠 | 关闭原生 CC，或调整字幕距底部的位置 |
+| 显示兼容音频模式 | AudioWorklet 不可用时已退回 ScriptProcessor，页面繁忙可能影响采集 |
+
+默认每 505 秒轮换连接，断线会重连，短暂显示切换连接属于正常过程。反馈问题时提供 Chrome 版本、插件版本和复现步骤，日志先去除 Key 和私人背景。
+
+- Chrome 是已测试浏览器，其他 Chromium 浏览器及其商店尚未验证。
+- 标准画中画不显示本扩展的 DOM 字幕层。
+- 实时翻译会有延迟、漏译和专名错误，目标是辅助理解。
+- 当前 preview 模型和项目实测的 `systemInstruction` 行为属于实验依赖，后续服务变更可能影响效果。
+- 提示词围栏是尽力约束，不能保证模型绝不执行资料里的指令。
+- 跨多次轮换的长时间真实直播仍需专门测试。
+
+## 开发
+
+Node.js 22+，无需安装 npm 依赖：
+
+```sh
+npm run check
+npm run package
+```
+
+`check` 包括语法检查、版本一致性、算法自检和会话竞态回归。`package` 生成 `dist/live-translate-extension-0.1.1.zip`，只包含运行文件，`manifest.json` 直接位于 ZIP 根目录。GitHub Actions 执行同样的检查与打包验证。
+
+自动化测试使用模拟回调与 WebSocket，不能代替真实音频与 Gemini 实测。代码结构和关键约束见 [开发说明](docs/development.md)。
+
+## 来源与许可
+
+本扩展从 [流译 Android 项目](https://github.com/xieyuanqing/vtuber-live-translate) 的浏览器分支拆出，现独立维护代码、文档、检查与发布，不依赖 Android 项目运行。
+
+新仓库使用干净的 Git 历史。最初开发记录保留在原仓库的 [feat/chrome-extension 分支](https://github.com/xieyuanqing/vtuber-live-translate/tree/feat/chrome-extension)，独立版本包含 0.1.1 的稳定性修复与弹窗改进。
+
+更新记录见 [CHANGELOG.md](CHANGELOG.md)。沿用 [MIT License](LICENSE)。

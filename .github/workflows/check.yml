@@ -1,0 +1,29 @@
+name: Check extension
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+      - run: npm run check
+      - run: npm run package
+      - name: Verify ZIP
+        run: unzip -t dist/*.zip
+      - run: git diff --exit-code
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: live-translate-extension
+          path: dist/*.zip
+          if-no-files-found: error
