@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0 — 2026-09-15
+
+### Whole-video subtitles
+
+- Added a whole-video subtitle mode for ordinary videos and finished replays, alongside the existing live audio mode. The two modes share the caption layer and settings and are mutually exclusive on a page.
+- Read the video's own caption track through the page bridge: the bridge hooks `fetch` and `XMLHttpRequest` at document start to reuse the player's own `timedtext` request, which carries the validation parameters that a bare `baseUrl` request lacks. It prefers an already-fetched body, then refetches the captured URL as `json3`, then temporarily enables the track so the player loads it, restoring the user's CC state afterwards.
+- Convert auto-generated captions from word timings into translation units using estimated pauses, a maximum length, and a maximum duration; manual tracks keep their original cues. The program owns the timeline; the model receives and returns numbered lines only.
+- Translate in blocks with surrounding context, starting at the current playback position with a small head block so nearby captions appear first, then later blocks, then earlier ones. Translated units are displayed as soon as their request is validated.
+- Validate the whole id set of each response. Truncated output retranslates only the missing tail; scattered gaps are topped up by id; rate limits back off with the provider's retry hint; invalid keys or model names stop the task immediately.
+- Cache source units and per-block translations in `chrome.storage.local` with `unlimitedStorage`. Blocks are written independently after validation, an interrupted run resumes, and a cache built with a different model or prompt is kept and labeled instead of being silently retranslated.
+- Added a text-model configuration (Gemini `generateContent` or OpenAI-compatible `chat/completions`, base URL, key, model name, concurrency, request path). Requests go directly from the page and fall back to a streaming relay through the service worker for endpoints that reject cross-origin requests; custom domains are authorized from Settings via optional host permissions.
+- Added a whole-video section to the popup (start, cancel, show/hide, retranslate, progress with the watchable frontier) and cache management to Settings.
+
+### Verification
+
+- Self-tests cover json3 parsing, segmentation, chunk planning and priority, response parsing and validation, playback scheduling, cache fingerprints, subtitle prompts, request building, and SSE parsing.
+- Ten whole-video task regression cases pass with simulated caption tracks, model responses, and storage: head-first ordering, truncation recovery, id top-up, rate-limit retry, fatal errors, cancellation, video switching, cache hits with zero requests, stale-config handling, resume, and segmentation version changes.
+- These checks do not exercise YouTube's caption endpoint or a real model. Reading a real caption track, translating a real replay, and verifying playback sync in Chrome remain outstanding.
+
 ## 0.1.1 — 2026-09-13
 
 ### Standalone repository

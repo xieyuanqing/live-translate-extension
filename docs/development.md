@@ -9,15 +9,23 @@ This repository contains only the browser extension. The runtime is plain JavaSc
 | `manifest.json` | MV3 permissions, content-script order, popup, settings, and shortcut |
 | `src/common/` | Defaults, editable scenes, local storage, and prompt composition |
 | `src/audio/pcm16k.js` | Mono mixing, continuous resampling, and 100 ms PCM blocks |
-| `src/main-world/page-bridge.js` | Reads YouTube player metadata in the page's JavaScript world |
-| `src/content/main.js` | Session snapshots, navigation, cancellation, and audio gating |
+| `src/main-world/page-bridge.js` | Reads player metadata and caption tracks in the page's JavaScript world; hooks `fetch` / XHR to reuse the player's own `timedtext` requests |
+| `src/content/main.js` | Session snapshots, navigation, cancellation, audio gating, and wiring for both modes |
 | `src/content/audio-tap.js` | Shared audio context and the capture branch of the audio graph |
 | `src/content/gemini-live.js` | Setup, queueing, rotation, reconnection, and socket generations |
 | `src/content/stabilizer.js` | Streaming fragments to current and committed caption text |
-| `src/content/caption-layer.js` | Captions and status inside `#movie_player` |
-| `src/background/` | Installation defaults, per-tab badges, and shortcut forwarding |
+| `src/content/caption-layer.js` | Captions and status inside `#movie_player`; timed mode for whole-video subtitles |
+| `src/content/video-subs.js` | Whole-video task: read track, plan blocks, translate with priority, validate, cache, display by time |
+| `src/subs/json3.js` | YouTube `json3` caption parsing into timed word fragments |
+| `src/subs/segmenter.js` | Auto-caption regrouping into translation units; manual cues kept as-is |
+| `src/subs/chunker.js` | Block planning, priority, request text, response parsing and validation |
+| `src/subs/scheduler.js` | Unit lookup by playback time and the watchable frontier |
+| `src/subs/net.js` | Direct fetch or streaming relay through the service worker; SSE parsing |
+| `src/subs/text-model.js` | Gemini `generateContent` and OpenAI-compatible request/response handling |
+| `src/subs/cache.js` | `chrome.storage.local` layout, fingerprints, and cache management |
+| `src/background/` | Installation defaults, per-tab badges, shortcut forwarding, and the request relay |
 | `src/ui/` | Popup and options page |
-| `tools/` | Self-tests, lifecycle regression tests, syntax checks, packaging, and icon generation |
+| `tools/` | Self-tests, lifecycle and whole-video regression tests, syntax checks, packaging, and icon generation |
 
 ## Audio and page lifecycle
 
@@ -79,6 +87,24 @@ Audio chunks use `realtimeInput.audio`, a base64 payload, and MIME type `audio/p
 
 Rotation is a reconnect with queued audio, not overlapping seamless connections.
 
+## Whole-video subtitles
+
+The task lives in the content script, like the live session, and is cancelled by navigation, reload, or the user. Everything that finished validation is already in storage, so cancelling loses only in-flight requests. Starting either mode deactivates the other because they share the caption layer.
+
+**Reading the track.** The page bridge runs at `document_start` in the MAIN world and wraps `window.fetch` and `XMLHttpRequest` to record the player's `/api/timedtext` requests and bodies. Since 2025 those requests carry a `pot` parameter; a bare `baseUrl` from the player response returns an empty 200. Resolution order: an already-captured `json3` body for the same video, language, and kind; refetching the captured URL with `fmt=json3`; enabling the track through the player API so the player loads it (the user's CC state is restored afterwards); reusing another captured request for the same video with the track parameters swapped, which works because `lang`, `kind`, and `fmt` are not in `sparams`; finally the `baseUrl`. Auto-translated tracks (`tlang`) are never selected. The bridge's own refetches are excluded from capture to avoid loops. This is undocumented YouTube behavior and must be verified in a real browser after YouTube changes.
+
+**Units.** `Json3.parse` flattens events into words with absolute times and skips `aAppend` rolling markers. For auto captions, `Segmenter.build` groups words by estimated pauses (word end is estimated from character count because `json3` has no word end times), splits over-long or over-long-duration groups at the largest pause near the middle, merges tiny fragments into the next unit, and ends each unit before the next one starts. Manual tracks keep their cues. Ids are sequential from 1; the model never sees times. Changing any segmentation rule requires bumping `LT.SUBS.SEG_VERSION`, which is part of the cache fingerprint and the source-cache validity check.
+
+**Blocks and order.** `Chunker.plan` splits by unit count and character count. Workers pick the block containing the playback position first, then later blocks by distance, then earlier ones. The block containing the position is requested as a head range of `HEAD_UNITS` starting at the position, then the rest, then the part before the position. Each request carries `CONTEXT_UNITS` of surrounding source text as reference only. Displayed text comes straight from the in-memory unit array, so a unit is watchable as soon as its request validated; the "complete" flag only gates zero-request cache hits.
+
+**Validation.** Responses are `id<TAB>text` lines. The whole id set is checked, empty translations count as missing, and extra ids are ignored. A finish reason of length, or a missing suffix, is treated as truncation: only the tail is retranslated, or the range is halved when nothing usable came back. Scattered gaps are topped up with a request for the missing ids; leftover very short units or bracketed tags fall back to the source text. Rate limits set a shared cooldown from `Retry-After` or Gemini's `retryDelay`; 5xx and network errors back off exponentially; 400/401/403/404 are fatal and stop the task.
+
+**Cache.** Keys are `vs:index`, `vs:m:<videoId>` (track, target, fingerprint, block bounds, complete flag), `vs:s:<videoId>:<trackKey>` (packed units), and `vs:c:<videoId>:<fp>:<i>` (one array per block, written only after the block is complete). The fingerprint covers the segmentation version, block parameters, track, target language, API type, model, and the full system prompt. A complete cache with a different fingerprint is loaded and labeled as stale; only an explicit retranslate removes the old blocks. Meta writes are small; block writes never rewrite each other.
+
+**Network.** `Net.post` tries a direct `fetch` from the page (Gemini and OpenAI official endpoints allow cross-origin requests) and falls back to a `chrome.runtime.connect` port to the service worker on a network-level failure, remembering the origin for the rest of the page. The worker checks `chrome.permissions.contains` for the origin, streams the response back in chunks, and aborts when the port closes. Streaming keeps the worker's 30-second idle and 5-minute request limits out of the way for ordinary requests; long non-streaming responses would not be safe there. Custom domains are granted from Settings through `optional_host_permissions`.
+
+For a browser check, `LT.debug.videoSubs` exposes the controller and `LT.debug.startVideoSubs(force)` starts a task; `LT.debug.videoSubs.status()` shows requests made, which should be zero on a cache hit. The outstanding real-world validation is reading a real caption track (manual, auto, and multi-language), translating at least one replay longer than an hour with the selected model, checking playback sync at the start, middle, and end, and confirming behavior across popup close, video switching, tab close, and browser restart.
+
 ## Checks and packaging
 
 Use Node.js 22+:
@@ -93,6 +119,6 @@ No dependency installation is needed. The package script writes a deterministic,
 
 GitHub Actions also checks ZIP integrity and uploads the archive as a workflow artifact. A release ZIP can be extracted into a permanent directory and loaded unpacked.
 
-For a browser check, reload the extension and then refresh YouTube. In DevTools, select the extension's content-script execution context before using `LT.debug.start()`, `LT.debug.stop()`, or `LT.debug.status()`. The page's default MAIN world does not expose that object. Never paste API keys or private notes into public diagnostics.
+For a browser check, reload the extension and then refresh YouTube. In DevTools, select the extension's content-script execution context before using `LT.debug.start()`, `LT.debug.stop()`, `LT.debug.status()`, or `LT.debug.videoSubs`. The page's default MAIN world does not expose that object. Never paste API keys or private notes into public diagnostics.
 
-The remaining real-world validation is a live-stream soak test covering multiple 505-second rotations, a network interruption, and video navigation. The automated tests exercise state transitions using mocks; they do not establish upstream availability or capture quality.
+The remaining real-world validation is a live-stream soak test covering multiple 505-second rotations, a network interruption, and video navigation, plus the whole-video checks listed above. The automated tests exercise state transitions using mocks; they do not establish upstream availability, caption-endpoint behavior, or translation quality.
