@@ -1,15 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "流译 · YouTube 直播实时翻译",
+  "name": "流译 · YouTube 直播实时翻译与整片字幕",
   "short_name": "流译",
-  "description": "抓取 YouTube 直播音频，经 Gemini Live Translate 实时翻译，字幕直接叠在播放器里。",
-  "version": "0.1.1",
+  "description": "直播：抓取播放器音频经 Gemini Live 实时翻译。视频与回放：读取 YouTube 字幕轨，用文字模型整片翻译并缓存。字幕直接叠在播放器里。",
+  "version": "0.2.0",
   "permissions": [
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://generativelanguage.googleapis.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js"
@@ -57,6 +63,14 @@
         "src/content/audio-tap.js",
         "src/content/caption-layer.js",
         "src/content/youtube.js",
+        "src/subs/json3.js",
+        "src/subs/segmenter.js",
+        "src/subs/chunker.js",
+        "src/subs/scheduler.js",
+        "src/subs/net.js",
+        "src/subs/text-model.js",
+        "src/subs/cache.js",
+        "src/content/video-subs.js",
         "src/content/main.js"
       ],
       "css": ["src/content/caption-layer.css"]

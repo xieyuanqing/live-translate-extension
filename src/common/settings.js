@@ -21,6 +21,12 @@ globalThis.LT = globalThis.LT || {};
     s.captionScale = clamp(Number(s.captionScale) || 1, 0.6, 2.5);
     s.captionBottom = clamp(Number(s.captionBottom) || 11, 2, 60);
     s.captionOpacity = clamp(Number(s.captionOpacity), 0, 100);
+    if (s.textApiType !== 'openai') s.textApiType = 'gemini';
+    if (!['auto', 'direct', 'relay'].includes(s.textRequestPath)) s.textRequestPath = 'auto';
+    s.textConcurrency = clamp(Number(s.textConcurrency) || 3, 1, 6);
+    s.textBaseUrl = String(s.textBaseUrl || '').trim().replace(/\/+$/, '');
+    s.textApiKey = String(s.textApiKey || '').trim();
+    s.textModel = String(s.textModel || '').trim();
     return s;
   }
 

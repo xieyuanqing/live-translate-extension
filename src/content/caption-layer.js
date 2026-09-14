@@ -99,6 +99,14 @@ globalThis.LT = globalThis.LT || {};
       if (this.root) this.root.classList.toggle('lt-hidden', !visible);
     }
 
+    /** 整片字幕模式：只显示当前时间对应的一条（可带原文），不走「确认行 + 当前行」的滚动模型。 */
+    showTimed(text, source) {
+      this.lines = text ? [text] : [];
+      this.current = '';
+      this.source = source || '';
+      this.render();
+    }
+
     /**
      * @param {string} text 提示文字，空串表示隐藏
      * @param {'ok'|'warn'|'err'} kind

@@ -124,7 +124,37 @@ globalThis.LT = globalThis.LT || {};
     captionOpacity: 60, // 背景不透明度 %
     showSource: false, // 同时显示原文
     pauseOnAd: true,
+
+    // ---- 整片字幕（视频 / 回放）用的文字模型 ----
+    textApiType: 'gemini', // gemini | openai
+    textBaseUrl: '', // 留空用官方地址
+    textApiKey: '', // Gemini 留空则复用上面的 Live Key
+    textModel: 'gemini-3.5-flash',
+    textConcurrency: 3, // 同时进行的翻译请求数
+    textRequestPath: 'auto', // auto | direct | relay：页面直连还是经后台转发
+    autoShowCached: true, // 打开已翻译过的视频时自动显示缓存字幕
   };
+
+  // ---------- 整片字幕：文字模型与分块参数 ----------
+  LT.TEXT_API_TYPES = [
+    { code: 'gemini', label: 'Gemini generateContent' },
+    { code: 'openai', label: 'OpenAI 兼容 chat/completions' },
+  ];
+  LT.TEXT_DEFAULT_BASE = {
+    gemini: 'https://generativelanguage.googleapis.com',
+    openai: 'https://api.openai.com/v1',
+  };
+  LT.SUBS = {
+    SEG_VERSION: 1, // 分句规则版本，进缓存指纹；改 segmenter 规则要升号
+    CHUNK_UNITS: 60, // 每块最多条数
+    CHUNK_CHARS: 2500, // 每块最多原文字符
+    CONTEXT_UNITS: 15, // 每块附带的前后参考条数
+    HEAD_UNITS: 20, // 含当前位置的块先翻这么多条，眼前的字幕先出来
+    MIN_SPLIT_UNITS: 8, // 输出截断时拆块的最小粒度
+    MAX_ATTEMPTS: 3, // 单个区间的最多尝试次数（限流等待不计）
+    BACKOFF_MS: 4000, // 重试退避基数
+  };
+  LT.RELAY_PORT = 'lt-relay'; // 内容脚本 ↔ Service Worker 的请求转发端口
 
   // ---------- 消息类型 ----------
   LT.MSG = {
@@ -135,11 +165,20 @@ globalThis.LT = globalThis.LT || {};
     TOGGLE: 'lt:toggle',
     SETTINGS_CHANGED: 'lt:settings-changed',
     SET_TEMP_CONTEXT: 'lt:set-temp-context',
+    // 整片字幕
+    VS_START: 'lt:vs-start', // payload: { force?: boolean }
+    VS_CANCEL: 'lt:vs-cancel',
+    VS_SET_VISIBLE: 'lt:vs-set-visible', // payload: boolean
+    VS_CLEAR: 'lt:vs-clear', // 删除当前视频的缓存
   };
 
   // 页面桥（MAIN world）与内容脚本之间的 window.postMessage 协议
   LT.BRIDGE = {
     REQ: 'lt-bridge:request',
     META: 'lt-bridge:meta',
+    // 请求种类（page-bridge.js 里不能引用 LT，字符串要手动对上）
+    KIND_META: 'meta',
+    KIND_TRACKS: 'tracks',
+    KIND_CAPTIONS: 'captions',
   };
 })();

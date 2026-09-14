@@ -54,8 +54,8 @@ globalThis.LT = globalThis.LT || {};
       );
     },
 
-    /** 向 MAIN world 要一次元数据；播放器没就绪会返回 null。 */
-    requestMeta(timeoutMs = 1500) {
+    /** 向 MAIN world 发一次请求；kind 见 LT.BRIDGE.KIND_*。超时或播放器没就绪返回 null。 */
+    request(kind, args, timeoutMs = 1500) {
       return new Promise((resolve) => {
         const id = reqSeq++;
         const timer = setTimeout(() => {
@@ -66,8 +66,44 @@ globalThis.LT = globalThis.LT || {};
           clearTimeout(timer);
           resolve(payload);
         });
-        window.postMessage({ __lt: TAG, dir: 'req', id }, '*');
+        window.postMessage({ __lt: TAG, dir: 'req', id, kind, args }, '*');
       });
+    },
+
+    /** 向 MAIN world 要一次元数据；播放器没就绪会返回 null。 */
+    requestMeta(timeoutMs = 1500) {
+      return this.request(LT.BRIDGE.KIND_META, undefined, timeoutMs);
+    },
+
+    /** 当前视频的字幕轨列表：{ videoId, defaultIndex, tracks[] }。 */
+    captionTracks() {
+      return this.request(LT.BRIDGE.KIND_TRACKS, undefined, 3000);
+    },
+
+    /** 读一条字幕轨的 json3 文本。页面桥可能要触发播放器加载并等待，超时给长一点。 */
+    fetchCaptions(track) {
+      return this.request(LT.BRIDGE.KIND_CAPTIONS, track, 25000);
+    },
+
+    /**
+     * 选字幕轨：指定源语言时先人工轨再自动轨；自动检测时用播放器默认轨，
+     * 其次第一条人工轨、第一条自动轨。自动翻译出来的轨不在列表里，不会被选到。
+     */
+    chooseTrack(tracks, sourceLang, defaultIndex = -1) {
+      if (!Array.isArray(tracks) || tracks.length === 0) return null;
+      const base = (code) => String(code || '').toLowerCase().split('-')[0];
+      const human = tracks.filter((t) => t.kind !== 'asr');
+      const asr = tracks.filter((t) => t.kind === 'asr');
+      if (sourceLang && sourceLang !== 'auto') {
+        const want = base(sourceLang);
+        return (
+          human.find((t) => base(t.languageCode) === want) ||
+          asr.find((t) => base(t.languageCode) === want) ||
+          null
+        );
+      }
+      if (defaultIndex >= 0 && tracks[defaultIndex]) return tracks[defaultIndex];
+      return human[0] || asr[0] || null;
     },
 
     /** 播放器初始化有延迟，轮询几次直到拿到当前视频的元数据。 */

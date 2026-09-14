@@ -152,4 +152,16 @@ textarea::placeholder { color: #778292; }
 #tempHint { margin-top: 5px; }
 #hint:empty { display: none; }
 #restart { width: 100%; margin-top: 8px; color: var(--accent); }
-@media (prefers-reduced-motion: reduce) { .level i { transition: none; } }
+
+/* 整片字幕区块（只在非直播视频页显示） */
+.vs { margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.vs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.vs-title { font-weight: 600; }
+#vsState { text-align: right; overflow-wrap: anywhere; }
+.vs-bar { height: 4px; border-radius: 2px; background: #2a2a2a; overflow: hidden; margin-bottom: 8px; }
+.vs-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.3s ease; }
+.vs-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.vs-actions button { flex: 1 1 auto; padding: 6px 10px; border-radius: 8px; }
+#vsHint { margin-top: 6px; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+#vsHint:empty { display: none; }
+@media (prefers-reduced-motion: reduce) { .level i, .vs-bar i { transition: none; } }

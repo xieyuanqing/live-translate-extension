@@ -43,6 +43,10 @@ async function sessionHarness() {
     pushCommitted() {} setCurrent() {} setSource() {} render() {}
   };
   LT.SubtitleStabilizer = class { reset() {} onFragment() {} };
+  LT.VideoSubsController = class {
+    status() { return { phase: 'idle' }; } start() {} cancel() {} deactivate() {}
+    onVideoChanged() {} tick() {} setVisible() {} async clearCache() {}
+  };
   LT.GeminiLiveClient = class {
     constructor(opts) { this.opts = opts; this.starts = 0; this.running = false; clients.push(this); }
     start() { this.starts++; this.running = true; } stop() { this.running = false; }

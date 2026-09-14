@@ -54,6 +54,53 @@
       </section>
 
       <section class="card">
+        <h2>整片字幕翻译（视频 / 回放）</h2>
+        <p class="muted small">
+          直播用上面的 Live 模型听音频。普通视频和已结束的回放读取 YouTube 自带的字幕轨，
+          用这里的文字模型整片翻译，结果缓存在本机，再看同一视频不再花额度。
+        </p>
+        <div class="two">
+          <div class="field">
+            <span class="label">接口类型</span>
+            <select id="textApiType"></select>
+          </div>
+          <div class="field">
+            <span class="label">模型名</span>
+            <input type="text" id="textModel" placeholder="例：gemini-3.5-flash" />
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">接口地址（留空用官方地址）</span>
+          <input type="text" id="textBaseUrl" placeholder="https://generativelanguage.googleapis.com" />
+          <p class="muted small" id="textBaseHint"></p>
+          <div class="row" style="margin-top: 6px">
+            <button id="grantHost" class="small">授权浏览器访问该域名</button>
+            <span id="grantState" class="muted small"></span>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">API Key（Gemini 留空则复用上面的 Live Key）</span>
+          <input type="password" id="textApiKey" placeholder="sk-... 或 AIza..." />
+        </div>
+        <div class="two">
+          <div class="field">
+            <span class="label">并发请求数：<b id="textConcurrencyVal"></b></span>
+            <input type="range" id="textConcurrency" min="1" max="6" step="1" />
+            <p class="muted small">受接口每分钟额度限制，遇到限流会自动等待。</p>
+          </div>
+          <div class="field">
+            <span class="label">请求路径</span>
+            <select id="textRequestPath"></select>
+            <p class="muted small">官方接口页面直连即可；第三方地址跨域被拒时会改走扩展后台。</p>
+          </div>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="autoShowCached" />
+          <span>打开已翻译过的视频时自动显示缓存字幕</span>
+        </label>
+      </section>
+
+      <section class="card">
         <h2>背景资料</h2>
         <label class="check">
           <input type="checkbox" id="useMetadata" />
@@ -135,15 +182,32 @@
       </section>
 
       <section class="card">
+        <h2>字幕缓存</h2>
+        <p class="muted small">
+          整片字幕的原文和译文保存在浏览器本地存储里，不会自动过期；这里可以按视频删除或全部清空。
+        </p>
+        <div id="cacheList" class="cache-list"></div>
+        <div class="row">
+          <span id="cacheTotal" class="muted small"></span>
+          <span class="grow"></span>
+          <button id="refreshCache" class="ghost small">刷新</button>
+          <button id="clearCache" class="danger small">清空全部缓存</button>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>提示词预览</h2>
-        <p class="muted small">这就是开始翻译时发给模型的 systemInstruction（元数据部分用示例占位）。</p>
+        <p class="muted small">实时翻译开始时发给 Live 模型的 systemInstruction（元数据部分用示例占位）。</p>
         <pre id="preview" class="preview"></pre>
+        <p class="muted small">整片字幕翻译发给文字模型的系统提示词（按自动字幕示例）。</p>
+        <pre id="previewSubs" class="preview"></pre>
       </section>
     </div>
 
     <script src="../common/constants.js"></script>
     <script src="../common/settings.js"></script>
     <script src="../common/prompt.js"></script>
+    <script src="../subs/cache.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

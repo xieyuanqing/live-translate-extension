@@ -45,11 +45,80 @@
     return `${m}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  const pad = (n) => String(n).padStart(2, '0');
+  function fmtClock(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
+  }
+
   function banner(text, kind) {
     const el = $('banner');
     el.classList.toggle('hidden', !text);
     el.classList.toggle('info', kind === 'info');
     el.textContent = text || '';
+  }
+
+  // ---------- 整片字幕区块 ----------
+
+  function renderVideo() {
+    const v = status && status.video;
+    const show = !!status && status.onWatchPage && !status.isLive && !!v;
+    $('vsBox').classList.toggle('hidden', !show);
+    if (!show) return;
+
+    const working = v.phase === 'reading' || v.phase === 'translating';
+    const pct = v.total ? Math.round((v.done / v.total) * 100) : 0;
+    const target = LT.targetLabel(settings.targetLang);
+    let state = '';
+    let hint = '';
+    let startLabel = '翻译整片字幕';
+    switch (v.phase) {
+      case 'reading':
+        state = '读取字幕轨…';
+        break;
+      case 'translating':
+        state = `翻译中 ${pct}%` + (v.frontierIdx >= 0 ? ` · 可看到 ${fmtClock(v.frontierMs)}` : ' · 正在翻译当前位置');
+        hint = '翻好的部分会立刻显示，可以边看边等。拖到没翻的地方会优先翻那里；关闭弹窗不影响。';
+        break;
+      case 'ready':
+        state = v.fromCache ? '已就绪（缓存）' : '已就绪';
+        hint = v.staleConfig
+          ? '这份缓存是用旧设置翻译的。要按当前设置重翻请点「重新翻译」，会重新消耗额度。'
+          : `${v.trackLabel || '字幕轨'} → ${target} · 共 ${v.unitCount} 条${v.saveError ? ' · 缓存未保存' : ''}`;
+        break;
+      case 'partial':
+        state = `已翻译 ${v.done}/${v.total} 块` + (v.failed ? `，${v.failed} 块失败` : '');
+        startLabel = '继续翻译';
+        hint = '继续会复用已完成的片段，只翻剩下的。';
+        break;
+      case 'error':
+        state = '出错';
+        startLabel = '重试';
+        hint = v.error || '';
+        break;
+      default:
+        if (v.hasCache) {
+          state = v.cachedComplete ? '已有缓存' : '已有部分缓存';
+          startLabel = v.cachedComplete ? '加载缓存字幕' : '继续翻译';
+        } else {
+          state = '未翻译';
+          hint = '读取这个视频的字幕轨，用文字模型整片翻译并缓存；再看同一视频不再花额度。';
+        }
+        break;
+    }
+    $('vsState').textContent = state;
+    $('vsProgress').style.width = `${v.phase === 'ready' ? 100 : pct}%`;
+    $('vsStart').textContent = startLabel;
+    $('vsStart').classList.toggle('hidden', working || v.phase === 'ready');
+    $('vsStart').disabled = busy;
+    $('vsCancel').classList.toggle('hidden', !working);
+    const hasTexts = v.done > 0 || v.frontierIdx >= 0 || v.phase === 'translating';
+    $('vsToggle').classList.toggle('hidden', !hasTexts);
+    $('vsToggle').textContent = v.visible ? '隐藏字幕' : '显示字幕';
+    $('vsRetranslate').classList.toggle('hidden', working || !(v.phase === 'ready' || v.phase === 'partial'));
+    $('vsHint').textContent = hint;
   }
 
   function renderStatus() {
@@ -67,7 +136,7 @@
             : '';
     dot.className = dotKind ? `dot ${dotKind}` : 'dot';
 
-    $('toggle').textContent = status?.phase === 'starting' ? '取消启动' : running ? '停止翻译' : '开始翻译';
+    $('toggle').textContent = status?.phase === 'starting' ? '取消启动' : running ? '停止实时翻译' : '开始实时翻译';
     $('toggle').classList.toggle('on', running);
     $('toggle').disabled = busy || !status || !status.onWatchPage;
     $('reloadPage').classList.toggle('hidden', !!status || tabId == null);
@@ -81,12 +150,14 @@
     $('stTime').textContent = fmtTime(status?.elapsedMs);
     $('level').style.width = `${running ? status.level : 0}%`;
 
+    renderVideo();
+
     if (!status) {
-      $('videoTitle').textContent = tabId == null ? '打开一场 YouTube 直播' : '当前页面尚未连接';
+      $('videoTitle').textContent = tabId == null ? '打开一个 YouTube 直播或视频' : '当前页面尚未连接';
       $('videoMeta').textContent = tabId == null ? '字幕会直接显示在播放器里' : '安装或更新插件后，刷新页面即可恢复';
       $('tempContext').disabled = true;
       $('tempHint').textContent = '';
-      $('hint').textContent = 'Alt+T · 开始 / 停止翻译';
+      $('hint').textContent = 'Alt+T · 开始 / 停止实时翻译';
       banner('', '');
       return;
     }
@@ -114,7 +185,7 @@
       ? '修改后点下方「应用当前设置」即可生效。'
       : '开始翻译时生效；换视频或刷新后清空。';
 
-    if (LT.Settings.keyList(settings).length === 0) {
+    if (LT.Settings.keyList(settings).length === 0 && !settings.textApiKey) {
       banner('还没有填 API Key，先去设置里填一个再开始。', '');
     } else if (running && status.phase === 'running') {
       banner('', '');
@@ -126,7 +197,7 @@
 
     $('hint').textContent = running
       ? ''
-      : 'Alt+T · 开始 / 停止翻译';
+      : 'Alt+T · 开始 / 停止实时翻译（音频）';
   }
 
   async function refresh() {
@@ -175,6 +246,39 @@
     await chrome.tabs.reload(tabId);
     window.close();
   });
+
+  // ---------- 整片字幕操作 ----------
+
+  async function videoAction(fn) {
+    if (busy) return;
+    busy = true;
+    renderStatus();
+    try {
+      await settingsSave;
+      await fn();
+      await refresh();
+    } finally {
+      busy = false;
+      renderStatus();
+    }
+  }
+  $('vsStart').addEventListener('click', () =>
+    videoAction(async () => {
+      await send(LT.MSG.SET_TEMP_CONTEXT, $('tempContext').value);
+      await send(LT.MSG.VS_START, { force: false });
+    })
+  );
+  $('vsRetranslate').addEventListener('click', () => {
+    if (!confirm('重新翻译会丢弃这份译文并重新调用模型，消耗额度。继续？')) return;
+    videoAction(async () => {
+      await send(LT.MSG.SET_TEMP_CONTEXT, $('tempContext').value);
+      await send(LT.MSG.VS_START, { force: true });
+    });
+  });
+  $('vsCancel').addEventListener('click', () => videoAction(() => send(LT.MSG.VS_CANCEL)));
+  $('vsToggle').addEventListener('click', () =>
+    videoAction(() => send(LT.MSG.VS_SET_VISIBLE, !(status && status.video && status.video.visible)))
+  );
 
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
 

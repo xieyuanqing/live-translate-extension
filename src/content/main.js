@@ -13,6 +13,14 @@ globalThis.LT = globalThis.LT || {};
   const caption = new LT.CaptionLayer();
   let settings = LT.DEFAULTS;
 
+  // 整片字幕（视频 / 回放）：读字幕轨、文字模型翻译、缓存、按播放时间显示。
+  // 和直播会话共用字幕层，两者互斥：开始一边就让另一边让位。
+  const videoSubs = new LT.VideoSubsController({
+    caption,
+    getVideo: () => LT.YouTube.video(),
+    onStatus: () => pushStatus(),
+  });
+
   const session = {
     phase: 'idle', // idle | starting | running
     conn: '',
@@ -60,6 +68,7 @@ globalThis.LT = globalThis.LT || {};
       usedMetadata: session.snapshot ? !!session.snapshot.metaUsed : false,
       usedTemp: session.snapshot ? !!session.snapshot.tempUsed : false,
       tempContext,
+      video: videoSubs.status(),
     };
   }
 
@@ -110,6 +119,7 @@ globalThis.LT = globalThis.LT || {};
 
   async function start(reason) {
     if (session.phase !== 'idle') return;
+    videoSubs.deactivate(); // 实时翻译和整片字幕共用字幕层，开始实时翻译时整片字幕让位
     const generation = ++sessionGeneration;
     const videoId = LT.YouTube.videoIdFromUrl();
     const runTempContext = tempContext;
@@ -271,6 +281,7 @@ globalThis.LT = globalThis.LT || {};
     session.conn = 'stopped';
     session.error = '';
     caption.clear();
+    caption.setVisible(true); // 广告期间停止的话字幕层还藏着，整片字幕接着用得先亮回来
     caption.setStatus('', 'ok', false);
     pushStatus();
   }
@@ -328,6 +339,7 @@ globalThis.LT = globalThis.LT || {};
     currentMeta = null;
     tempContext = ''; // 临时补充跟着视频走，换视频即作废
     if (session.phase !== 'idle') await stop();
+    videoSubs.onVideoChanged(id, settings); // 作废旧任务；有缓存会按设置自动加载
     ensureMounted();
     if (!id) {
       pushStatus();
@@ -384,14 +396,38 @@ globalThis.LT = globalThis.LT || {};
         tempContext = String(msg.payload || '').trim();
         sendResponse({ ok: true });
         break;
+      case LT.MSG.VS_START:
+        startVideoSubs(!!(msg.payload && msg.payload.force));
+        break;
+      case LT.MSG.VS_CANCEL:
+        videoSubs.cancel();
+        break;
+      case LT.MSG.VS_SET_VISIBLE:
+        videoSubs.setVisible(!!msg.payload);
+        break;
+      case LT.MSG.VS_CLEAR:
+        videoSubs.clearCache().then(
+          () => sendResponse({ ok: true }),
+          (err) => sendResponse({ ok: false, error: err && err.message })
+        );
+        return true;
       default:
         break;
     }
     return undefined;
   });
 
+  /** 整片字幕：读取当前设置作为本次任务的快照；正在实时翻译就先停掉。 */
+  async function startVideoSubs(force) {
+    const runSettings = await LT.Settings.load();
+    settings = runSettings;
+    if (session.phase !== 'idle') await stop();
+    videoSubs.start({ settings: runSettings, meta: currentMeta, tempContext, force });
+  }
+
   window.addEventListener('pagehide', () => {
     if (session.phase !== 'idle') stop();
+    videoSubs.cancel();
   });
 
   LT.YouTube.onMetaPush((meta) => {
@@ -409,6 +445,8 @@ globalThis.LT = globalThis.LT || {};
     ensureMounted();
     applyGate();
   }, 500);
+  // 整片字幕按播放时间挑当前条；200ms 足够跟上一般字幕的节奏
+  setInterval(() => videoSubs.tick(), 200);
 
   (async () => {
     settings = await LT.Settings.load();
@@ -416,6 +454,6 @@ globalThis.LT = globalThis.LT || {};
     await handleVideoChanged();
   })();
 
-  // 方便在控制台手动调试：LT.debug.start() / LT.debug.stop()
-  LT.debug = { start, stop, session, status: statusSnapshot };
+  // 方便在控制台手动调试：LT.debug.start() / LT.debug.stop() / LT.debug.videoSubs
+  LT.debug = { start, stop, session, status: statusSnapshot, videoSubs, startVideoSubs };
 })();
