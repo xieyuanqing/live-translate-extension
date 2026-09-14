@@ -8,3 +8,6 @@ dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# Claude Code 在仓库内创建的 worktree，不能提交
+.claude/worktrees/
