@@ -91,7 +91,7 @@
 
   function inspectUrl(input) {
     try {
-      const raw = typeof input === 'string' ? input : input && input.url;
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input && input.url;
       if (!raw || raw.indexOf('/api/timedtext') === -1) return null;
       const url = new URL(raw, location.href);
       if (url.pathname !== '/api/timedtext') return null;
@@ -171,7 +171,20 @@
   // ---------- 读取一条字幕轨 ----------
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const isJson = (body) => typeof body === 'string' && body.trimStart().startsWith('{');
+  const isJson = (body) => {
+    try {
+      const data = JSON.parse(body);
+      return Array.isArray(data.events) && data.events.some(e =>
+        e && Array.isArray(e.segs) && e.segs.some(s => s && typeof s.utf8 === 'string' && s.utf8.trim()));
+    } catch (_) {
+      return false;
+    }
+  };
+  const onVideo = (videoId) => {
+    const url = new URL(location.href);
+    const id = url.pathname.startsWith('/live/') ? url.pathname.split('/')[2] : url.searchParams.get('v');
+    return id === videoId;
+  };
   const sameTrack = (c, want) =>
     c.v === want.videoId && c.lang === want.languageCode && (c.kind || '') === (want.kind || '') && !c.tlang;
 
@@ -188,14 +201,17 @@
 
   async function fetchJson3(url) {
     selfUrls.add(url);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
     try {
-      const res = await nativeFetch.call(window, url, { credentials: 'include' });
+      const res = await nativeFetch.call(window, url, { credentials: 'include', signal: controller.signal });
       if (!res.ok) return { error: `HTTP ${res.status}` };
       const text = await res.text();
       return isJson(text) ? { text } : { error: text.trim() ? 'NOT_JSON' : 'EMPTY' };
     } catch (err) {
       return { error: String((err && err.message) || err) };
     } finally {
+      clearTimeout(timer);
       setTimeout(() => selfUrls.delete(url), 60000);
     }
   }
@@ -242,6 +258,8 @@
       return noop;
     }
     return () => {
+      // YouTube 经常复用同一个播放器节点，不能恢复到新视频上。
+      if (!onVideo(want.videoId) || document.getElementById('movie_player') !== player) return;
       try {
         if (!wasOn) {
           if (typeof player.unloadModule === 'function') player.unloadModule('captions');
@@ -264,6 +282,9 @@
    */
   async function captions(want) {
     if (!want || !want.videoId || !want.languageCode) return { error: '缺少字幕轨参数' };
+    const current = () => onVideo(want.videoId);
+    const switched = () => ({ error: '视频已切换，已停止读取旧字幕' });
+    if (!current()) return switched();
 
     // 1. 播放器已经取到的正文
     const ready = captured.find((c) => sameTrack(c, want) && isJson(c.body));
@@ -273,6 +294,7 @@
     const known = captured.find((c) => sameTrack(c, want));
     if (known) {
       const r = await fetchJson3(withTrack(known.url, want));
+      if (!current()) return switched();
       if (r.text) return { text: r.text, source: 'refetch' };
     }
 
@@ -282,6 +304,7 @@
     try {
       for (let i = 0; i < 40 && !hit; i++) {
         await sleep(200);
+        if (!current()) return switched();
         hit = captured.find((c) => sameTrack(c, want));
       }
     } finally {
@@ -290,6 +313,7 @@
     if (hit) {
       if (isJson(hit.body)) return { text: hit.body, source: 'triggered' };
       const r = await fetchJson3(withTrack(hit.url, want));
+      if (!current()) return switched();
       if (r.text) return { text: r.text, source: 'triggered-refetch' };
     }
 
@@ -297,12 +321,14 @@
     const sibling = captured.find((c) => c.v === want.videoId);
     if (sibling) {
       const r = await fetchJson3(withTrack(sibling.url, want));
+      if (!current()) return switched();
       if (r.text) return { text: r.text, source: 'sibling' };
     }
 
     // 5. 最后试 baseUrl；缺 pot 参数时多半返回空
     if (want.baseUrl) {
       const r = await fetchJson3(withTrack(want.baseUrl, want));
+      if (!current()) return switched();
       if (r.text) return { text: r.text, source: 'baseUrl' };
       return { error: `字幕接口返回 ${r.error || 'EMPTY'}，可能是 YouTube 校验方式变了；先在播放器里手动打开一次 CC 再试` };
     }

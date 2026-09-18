@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — 2026-09-15
+## 0.2.0 — unreleased (updated 2026-09-18)
 
 ### Whole-video subtitles
 
@@ -13,10 +13,20 @@
 - Added a text-model configuration (Gemini `generateContent` or OpenAI-compatible `chat/completions`, base URL, key, model name, concurrency, request path). Requests go directly from the page and fall back to a streaming relay through the service worker for endpoints that reject cross-origin requests; custom domains are authorized from Settings via optional host permissions.
 - Added a whole-video section to the popup (start, cancel, show/hide, retranslate, progress with the watchable frontier) and cache management to Settings.
 
+### Stability and usability polish — 2026-09-18
+
+- Invalidate pending settings reads on cancellation, navigation, or a switch to live mode; ignore late cache-write callbacks from an older task.
+- Validate cached timelines, block boundaries, and non-empty translations. Include source content and endpoint identity in cache fingerprints; keep stale partial caches without silently retranslating them. Build the cache list from independent per-video records to prevent lost entries across tabs.
+- Load complete caches without an API key, show the cache's actual target language, and mark changed background/model settings. Hide inactive live statistics on replay pages and keep live translation available as a secondary action.
+- Abort text-model requests after two minutes, release cancellation listeners, and avoid treating an interrupted response stream as a cross-origin failure.
+- Recognize captured URL objects, reject JSON error bodies as captions, bound caption refetch time, and avoid restoring the old CC state after video navigation.
+- Leave the text-model name empty until configured and identify 0.2.0 as an unpublished development version.
+
 ### Verification
 
 - Self-tests cover json3 parsing, segmentation, chunk planning and priority, response parsing and validation, playback scheduling, cache fingerprints, subtitle prompts, request building, and SSE parsing.
-- Ten whole-video task regression cases pass with simulated caption tracks, model responses, and storage: head-first ordering, truncation recovery, id top-up, rate-limit retry, fatal errors, cancellation, video switching, cache hits with zero requests, stale-config handling, resume, and segmentation version changes.
+- Forty regression cases cover live sessions, whole-video tasks, network transport, and the page bridge using simulated browser APIs, caption tracks, model responses, and storage.
+- An offline browser check at 360 px popup width covered cached-language labels, show/hide, translation progress, cancel/resume controls, long errors, and the empty model field in Settings. No real provider or YouTube endpoint was exercised.
 - These checks do not exercise YouTube's caption endpoint or a real model. Reading a real caption track, translating a real replay, and verifying playback sync in Chrome remain outstanding.
 
 ## 0.1.1 — 2026-09-13

@@ -13,18 +13,29 @@ globalThis.LT = globalThis.LT || {};
   const relayOrigins = new Set(); // 本页内已确认直连失败的域名
 
   async function direct({ url, headers, body, signal }) {
-    const res = await fetch(url, { method: 'POST', headers, body, signal });
+    let res;
+    try {
+      res = await fetch(url, { method: 'POST', headers, body, signal });
+    } catch (err) {
+      // 只允许尚未收到响应的网络错误尝试另一条路径。
+      if (err instanceof TypeError) err.canRelay = true;
+      throw err;
+    }
     const retryAfter = res.headers.get('retry-after') || '';
     let text = '';
     if (res.body && typeof res.body.getReader === 'function') {
       const reader = res.body.getReader();
       const dec = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        text += dec.decode(value, { stream: true });
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          text += dec.decode(value, { stream: true });
+        }
+        text += dec.decode();
+      } finally {
+        reader.releaseLock();
       }
-      text += dec.decode();
     } else {
       text = await res.text();
     }
@@ -45,9 +56,11 @@ globalThis.LT = globalThis.LT || {};
       let retryAfter = '';
       let text = '';
       let settled = false;
+      const onAbort = () => finish(reject, new DOMException('已取消', 'AbortError'));
       const finish = (fn, value) => {
         if (settled) return;
         settled = true;
+        if (signal) signal.removeEventListener('abort', onAbort);
         try {
           port.disconnect();
         } catch (_) {
@@ -75,9 +88,13 @@ globalThis.LT = globalThis.LT || {};
           finish(reject, new DOMException('已取消', 'AbortError'));
           return;
         }
-        signal.addEventListener('abort', () => finish(reject, new DOMException('已取消', 'AbortError')), { once: true });
+        signal.addEventListener('abort', onAbort, { once: true });
       }
-      port.postMessage({ type: 'fetch', url, headers, body });
+      try {
+        port.postMessage({ type: 'fetch', url, headers, body });
+      } catch (err) {
+        finish(reject, err);
+      }
     });
   }
 
@@ -85,7 +102,7 @@ globalThis.LT = globalThis.LT || {};
    * @param {{url:string, headers:object, body:string, signal?:AbortSignal, path:'auto'|'direct'|'relay'}} req
    * @returns {Promise<{status:number, ok:boolean, text:string, retryAfter:string, via:string}>}
    */
-  async function post(req) {
+  async function route(req) {
     const origin = new URL(req.url).origin;
     const path = req.path || 'auto';
     if (path === 'relay' || (path === 'auto' && relayOrigins.has(origin))) {
@@ -95,9 +112,32 @@ globalThis.LT = globalThis.LT || {};
       return Object.assign(await direct(req), { via: 'direct' });
     } catch (err) {
       // fetch 本身抛 TypeError 才是网络层 / CORS 失败；HTTP 错误码不会走到这里
-      if (path !== 'auto' || !err || err.name === 'AbortError' || !(err instanceof TypeError)) throw err;
+      if (path !== 'auto' || !err || !err.canRelay || (req.signal && req.signal.aborted)) throw err;
       relayOrigins.add(origin);
       return Object.assign(await relay(req), { via: 'relay' });
+    }
+  }
+
+  /** 整个请求（包括读取流）最多等待两分钟；用户取消和超时分别处理。 */
+  async function post(req) {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    const external = req.signal;
+    if (external && external.aborted) throw new DOMException('已取消', 'AbortError');
+    if (external) external.addEventListener('abort', onAbort, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, LT.SUBS.REQUEST_TIMEOUT_MS);
+    try {
+      return await route({ ...req, signal: controller.signal });
+    } catch (err) {
+      if (timedOut) throw new Error('文字模型请求超时，请重试或降低并发请求数');
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      if (external) external.removeEventListener('abort', onAbort);
     }
   }
 

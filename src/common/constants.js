@@ -129,7 +129,7 @@ globalThis.LT = globalThis.LT || {};
     textApiType: 'gemini', // gemini | openai
     textBaseUrl: '', // 留空用官方地址
     textApiKey: '', // Gemini 留空则复用上面的 Live Key
-    textModel: 'gemini-3.5-flash',
+    textModel: '', // 使用用户账号实际可用的模型名，不预填未经验证的名称
     textConcurrency: 3, // 同时进行的翻译请求数
     textRequestPath: 'auto', // auto | direct | relay：页面直连还是经后台转发
     autoShowCached: true, // 打开已翻译过的视频时自动显示缓存字幕
@@ -153,6 +153,7 @@ globalThis.LT = globalThis.LT || {};
     MIN_SPLIT_UNITS: 8, // 输出截断时拆块的最小粒度
     MAX_ATTEMPTS: 3, // 单个区间的最多尝试次数（限流等待不计）
     BACKOFF_MS: 4000, // 重试退避基数
+    REQUEST_TIMEOUT_MS: 120000, // 整个文字模型请求的等待上限，包含流式正文
   };
   LT.RELAY_PORT = 'lt-relay'; // 内容脚本 ↔ Service Worker 的请求转发端口
 

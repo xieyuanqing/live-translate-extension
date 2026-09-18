@@ -2,7 +2,7 @@
  * 整片字幕缓存：chrome.storage.local，配合 unlimitedStorage。
  *
  * 键：
- *   vs:index                       所有已缓存视频的摘要，给设置页列表用
+ *   列表直接从每个视频的元信息生成，避免多标签页同时更新共享索引而丢项。
  *   vs:m:<videoId>                 元信息：轨道、目标语言、配置指纹、分块边界、是否完整
  *   vs:s:<videoId>:<trackKey>      原文单元（时间轴 + 原文），续翻和双语显示都用它，不必再读 YouTube
  *   vs:c:<videoId>:<fp>:<i>        第 i 块的译文数组，块完整校验通过才写；按块独立写入，并发不会互相覆盖
@@ -13,7 +13,6 @@ globalThis.LT = globalThis.LT || {};
 
 (() => {
   const LT = globalThis.LT;
-  const INDEX = 'vs:index';
   const store = () => chrome.storage.local;
 
   function fingerprint(parts) {
@@ -40,17 +39,7 @@ globalThis.LT = globalThis.LT || {};
     getMeta: (videoId) => getOne(metaKey(videoId)),
 
     async setMeta(meta) {
-      const index = (await getOne(INDEX)) || {};
-      index[meta.videoId] = {
-        title: meta.title || '',
-        trackLabel: meta.trackLabel || '',
-        targetLang: meta.targetLang,
-        model: meta.model || '',
-        unitCount: meta.unitCount,
-        complete: !!meta.complete,
-        updatedAt: meta.updatedAt,
-      };
-      await store().set({ [metaKey(meta.videoId)]: meta, [INDEX]: index });
+      await store().set({ [metaKey(meta.videoId)]: meta });
     },
 
     getSource: (videoId, trackKey) => getOne(sourceKey(videoId, trackKey)),
@@ -72,7 +61,10 @@ globalThis.LT = globalThis.LT || {};
     },
 
     async listIndex() {
-      return (await getOne(INDEX)) || {};
+      const all = await store().get(null);
+      return Object.fromEntries(Object.entries(all)
+        .filter(([key, value]) => key.startsWith('vs:m:') && value && value.videoId === key.slice(5))
+        .map(([key, value]) => [key.slice(5), value]));
     },
 
     async keysOf(videoId) {
@@ -90,9 +82,6 @@ globalThis.LT = globalThis.LT || {};
     async removeVideo(videoId) {
       const keys = await this.keysOf(videoId);
       if (keys.length) await store().remove(keys);
-      const index = (await getOne(INDEX)) || {};
-      delete index[videoId];
-      await store().set({ [INDEX]: index });
     },
 
     async clearAll() {

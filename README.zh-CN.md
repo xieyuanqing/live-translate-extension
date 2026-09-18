@@ -5,7 +5,7 @@
 直播：抓取 YouTube 播放器的音频，用自己的 Gemini API Key 实时翻译，字幕直接显示在播放器里，原声照常播放。
 视频与回放：读取 YouTube 自带的字幕轨，用文字模型整片翻译并缓存在本机，翻好的部分立刻能看，再看同一视频不再花额度。
 
-**当前版本：0.2.0。** 本仓库是独立的 Chrome Manifest V3 扩展，界面目前为简体中文。暂时使用手动安装，尚未上架浏览器扩展商店。
+**开发版：0.2.0，尚未发布。** 本仓库是独立的 Chrome Manifest V3 扩展，界面目前为简体中文。暂时使用手动安装，尚未上架浏览器扩展商店。
 
 ## 功能
 
@@ -30,7 +30,7 @@
 
 ## 安装
 
-1. 在 [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) 下载 `live-translate-extension-0.2.0.zip`。
+1. 本开发版使用本地生成的 `live-translate-extension-0.2.0.zip`，或直接加载当前源码目录。[Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) 提供已发布版本，0.2.0 暂未上传。
 2. 解压到一个固定目录，安装后保留该目录。
 3. 打开 `chrome://extensions/`，开启「开发者模式」。
 4. 点「加载已解压的扩展程序」，选择包含 `manifest.json` 的文件夹。
@@ -45,7 +45,7 @@
 1. 打开插件弹窗 →「设置」，填自己的 Gemini API Key。可在 [Google AI Studio](https://aistudio.google.com/apikey) 创建，Key 必须能访问当前配置的 Live Translate 模型。
 2. 确认浏览器能连接 `generativelanguage.googleapis.com`，或者配置兼容的 WSS 反代。
 3. 选择翻译方向，默认是日语 → 中文。
-4. 要用整片字幕，在「整片字幕翻译」里选接口类型、填模型名。Gemini 不单独填 Key 就复用上面的 Live Key；OpenAI 兼容接口要填自己的地址和 Key。默认模型名只是占位，以你的账号实际可用的模型为准。
+4. 要用整片字幕，在「整片字幕翻译」里选接口类型、填模型名。Gemini 不单独填 Key 就复用上面的 Live Key；OpenAI 兼容接口要填自己的地址和 Key。模型名默认留空，请填你的账号实际可用的模型。
 5. 打开直播页。配置 Key 后默认自动开始，可在设置中关闭。
 
 直播使用 `gemini-3.5-live-translate-preview`。可用性和费用由你的 Gemini 权限与服务计划决定，安装插件不包含 API 额度。
@@ -67,6 +67,8 @@
 开始时冻结本场配置，断线重连和定时轮换继续使用同一份快照。运行中修改翻译相关设置，要重新开始才生效。临时补充输入后立即传到页面内存，关掉弹窗不会丢字。
 
 整片字幕翻译时，播放器左上角显示进度和「从当前位置起可看到哪里」。关闭弹窗不影响任务；换视频、刷新或关闭标签页会取消尚未完成的请求，已完成的块已经落盘，回来再点「继续翻译」即可。
+
+完整缓存无需 API Key 也能加载。弹窗会显示缓存实际使用的目标语言；配置变化时，完整和部分缓存都会保留，恢复原设置可继续翻译，或手动选择按新设置重新翻译。单次请求最多等待两分钟，超时后按重试规则处理。录播页会收起未运行的实时翻译统计，让弹窗更紧凑。
 
 场景提示词是可复用偏好，长期背景每场都会带上，本场补充只属于当前视频，三者用途不同。
 

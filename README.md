@@ -8,7 +8,7 @@ Videos and replays: read the video's own YouTube caption track, translate the wh
 [![Checks](https://github.com/xieyuanqing/live-translate-extension/actions/workflows/check.yml/badge.svg)](https://github.com/xieyuanqing/live-translate-extension/actions/workflows/check.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Version 0.2.0.** A standalone Chrome Manifest V3 extension. The current interface is in Simplified Chinese. Install it manually for now; it is not listed in a browser extension store.
+**Development version 0.2.0 (unreleased).** A standalone Chrome Manifest V3 extension. The current interface is in Simplified Chinese. Install it manually for now; it is not listed in a browser extension store.
 
 ## What it does
 
@@ -34,7 +34,7 @@ Both modes share the caption layer and the scene, language, and background setti
 
 ## Install
 
-1. Open [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) and download `live-translate-extension-0.2.0.zip`.
+1. For this development version, use a locally built `live-translate-extension-0.2.0.zip`, or load this checkout directly. [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) contains published versions; 0.2.0 has not been published yet.
 2. Extract it into a permanent folder. Keep that folder after installation.
 3. Open `chrome://extensions/` and turn on **Developer mode**.
 4. Choose **Load unpacked** and select the extracted folder containing `manifest.json`.
@@ -49,7 +49,7 @@ For updates, replace the files in the same installation folder, reload the exten
 1. Open the extension popup and select **设置** (Settings).
 2. Enter your own Gemini API key. You can create one in [Google AI Studio](https://aistudio.google.com/apikey). Your key must have access to the configured Live Translate model.
 3. Make sure your browser can reach `generativelanguage.googleapis.com`, or configure a compatible WSS proxy in Settings.
-4. For whole-video subtitles, open **整片字幕翻译** in Settings, pick the API type, and enter a model name. Gemini reuses the Live key unless you enter a separate one; OpenAI-compatible endpoints need their own base URL and key. The default model name is only a placeholder; use a model your account can actually access.
+4. For whole-video subtitles, open **整片字幕翻译** in Settings, pick the API type, and enter a model name. Gemini reuses the Live key unless you enter a separate one; OpenAI-compatible endpoints need their own base URL and key. The model name starts empty: enter a model your account can actually access.
 5. Choose a translation direction. The default is **Japanese → Chinese**.
 6. Open a YouTube live stream. Automatic start is enabled by default once a key is configured; you can turn it off in Settings.
 
@@ -72,6 +72,8 @@ Live streams use `gemini-3.5-live-translate-preview`. Availability and API usage
 Each session freezes its translation configuration. Reconnecting or rotating a connection keeps that snapshot; editing settings takes effect when you start a new session. Temporary notes are sent to the page as you type, so closing the popup does not discard the input.
 
 While whole-video subtitles are being translated, the player shows the progress and how far from the current position is already watchable. Closing the popup does not affect the task. Changing videos, reloading, or closing the tab cancels unfinished requests; finished blocks are already saved, and **继续翻译** resumes from there.
+
+Complete cached subtitles can be loaded without an API key. The popup displays the cache's actual target language. If translation settings change, complete and partial caches remain available; restore the original settings to resume a partial cache, or explicitly retranslate with the new settings. Requests time out after two minutes instead of waiting indefinitely. On replay pages, inactive live statistics are hidden to keep the popup compact.
 
 Scene prompts, persistent background notes, and temporary notes are separate: scene prompts are reusable preferences; persistent notes are included in each session; temporary notes belong only to the current video.
 

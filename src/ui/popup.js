@@ -70,7 +70,8 @@
 
     const working = v.phase === 'reading' || v.phase === 'translating';
     const pct = v.total ? Math.round((v.done / v.total) * 100) : 0;
-    const target = LT.targetLabel(settings.targetLang);
+    const target = LT.targetLabel(v.targetLang || settings.targetLang);
+    const stale = v.staleConfig || (v.targetLang && v.targetLang !== settings.targetLang);
     let state = '';
     let hint = '';
     let startLabel = '翻译整片字幕';
@@ -84,14 +85,16 @@
         break;
       case 'ready':
         state = v.fromCache ? '已就绪（缓存）' : '已就绪';
-        hint = v.staleConfig
-          ? '这份缓存是用旧设置翻译的。要按当前设置重翻请点「重新翻译」，会重新消耗额度。'
+        hint = stale
+          ? `当前缓存：${v.trackLabel || '字幕轨'} → ${target}。设置已变化，按新设置翻译请点「重新翻译」。`
           : `${v.trackLabel || '字幕轨'} → ${target} · 共 ${v.unitCount} 条${v.saveError ? ' · 缓存未保存' : ''}`;
         break;
       case 'partial':
         state = `已翻译 ${v.done}/${v.total} 块` + (v.failed ? `，${v.failed} 块失败` : '');
         startLabel = '继续翻译';
-        hint = '继续会复用已完成的片段，只翻剩下的。';
+        hint = stale
+          ? `当前缓存译成${target}，设置已变化。恢复原设置后可续翻，或点「重新翻译」使用新设置。`
+          : '继续会复用已完成的片段，只翻剩下的。';
         break;
       case 'error':
         state = '出错';
@@ -110,6 +113,7 @@
     }
     $('vsState').textContent = state;
     $('vsProgress').style.width = `${v.phase === 'ready' ? 100 : pct}%`;
+    $('vsProgressBar').setAttribute('aria-valuenow', String(v.phase === 'ready' ? 100 : pct));
     $('vsStart').textContent = startLabel;
     $('vsStart').classList.toggle('hidden', working || v.phase === 'ready');
     $('vsStart').disabled = busy;
@@ -123,6 +127,11 @@
 
   function renderStatus() {
     const running = !!status && status.phase !== 'idle';
+    const liveFocus = running || !!status?.isLive;
+    $('liveDetails').classList.toggle('hidden', !liveFocus);
+    $('toggle').classList.toggle('primary', liveFocus);
+    $('toggle').classList.toggle('ghost', !liveFocus);
+    $('toggle').classList.toggle('secondary', !liveFocus);
     const dot = $('dot');
     // classList.add('') 会抛异常，所以先算出类名再决定加不加
     const dotKind = !status
@@ -186,7 +195,8 @@
       : '开始翻译时生效；换视频或刷新后清空。';
 
     if (LT.Settings.keyList(settings).length === 0 && !settings.textApiKey) {
-      banner('还没有填 API Key，先去设置里填一个再开始。', '');
+      const cached = !!status.video?.hasCache && !status.isLive;
+      banner(cached ? '缓存可直接观看；翻译新内容需配置 API Key。' : '还没有填 API Key，先去设置里填一个再开始。', cached ? 'info' : '');
     } else if (running && status.phase === 'running') {
       banner('', '');
     } else if (settings.autoStartLive && status.onWatchPage && status.isLive) {

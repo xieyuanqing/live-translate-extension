@@ -11,7 +11,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "check": "node tools/check.js",
-    "test": "node tools/selftest.js && node --test tools/lifecycle.test.js tools/video-subs.test.js",
+    "test": "node tools/selftest.js && node --test tools/lifecycle.test.js tools/video-subs.test.js tools/subs-net.test.js tools/page-bridge.test.js",
     "package": "node tools/package.js"
   }
 }

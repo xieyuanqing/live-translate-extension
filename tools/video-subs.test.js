@@ -92,7 +92,7 @@ test('从当前位置先翻小段，翻好即可显示，全部完成后按块�
   assert.equal(h.chunkKeys().length, 2);
   const meta = h.storage.data.get('vs:m:vid-A');
   assert.equal(meta.complete, true);
-  assert.equal(h.storage.data.get('vs:index')['vid-A'].complete, true);
+  assert.equal((await h.LT.SubsCache.listIndex())['vid-A'].complete, true);
   h.ctrl.tick();
   assert.deepEqual(h.caption.shown.at(-1), ['译67', '原文67']);
   const s = h.ctrl.status();
@@ -254,4 +254,119 @@ test('分句规则版本变化后不复用旧原文，重新读取字幕轨', as
   await again.start();
   assert.equal(reads, 1);
   assert.equal(again.ctrl.phase, 'ready');
+});
+
+test('分句版本变化并改变编号后，不能把旧译文套在新原文上', async () => {
+  const h = harness({ unitCount: 30 });
+  await h.start();
+  const again = harness({ unitCount: 20, storage: h.storage });
+  again.LT.SUBS.SEG_VERSION++;
+  await again.ctrl.onVideoChanged('vid-A', again.settings);
+  assert.equal(again.ctrl.units, null, '不自动显示旧分句缓存');
+  await again.start();
+  assert.equal(again.ctrl.units.length, 20);
+  assert.equal(again.ctrl.texts.length, 20);
+  assert.ok(again.calls.length > 0, '新编号必须重新翻译');
+});
+
+test('完整缓存无需 API Key 也可以手动加载', async () => {
+  const h = harness({ unitCount: 30 });
+  await h.start();
+  const again = harness({ unitCount: 30, storage: h.storage });
+  again.settings.apiKeys = '';
+  await again.start();
+  assert.equal(again.ctrl.phase, 'ready');
+  assert.equal(again.calls.length, 0);
+});
+
+test('不同视频同时保存缓存，不会相互覆盖缓存列表', async () => {
+  const h = harness({ unitCount: 30 });
+  const other = harness({ unitCount: 30, storage: h.storage });
+  other.setVideoId('vid-B');
+  await Promise.all([h.start(), other.start()]);
+  assert.deepEqual(Object.keys(await h.LT.SubsCache.listIndex()).sort(), ['vid-A', 'vid-B']);
+});
+
+test('缓存写入完成得晚，不能覆盖新视频的状态提示', async () => {
+  const h = harness({ unitCount: 30 });
+  const original = h.LT.SubsCache.setMeta;
+  let release;
+  h.LT.SubsCache.setMeta = async meta => {
+    await original(meta);
+    if (meta.complete) await new Promise(resolve => { release = resolve; });
+  };
+  const pending = h.start();
+  while (!release) await flush();
+  h.setVideoId('vid-B');
+  await h.ctrl.onVideoChanged('vid-B', h.settings);
+  const count = h.caption.statuses.length;
+  release();
+  await pending;
+  assert.equal(h.ctrl.phase, 'idle');
+  assert.equal(h.caption.statuses.length, count, '旧完成回调不得提示新视频已就绪');
+});
+
+test('长度正确但包含空译文的缓存块不能算完整，续翻会修复', async () => {
+  const h = harness({ unitCount: 30 });
+  await h.start();
+  const key = h.chunkKeys()[0];
+  const chunk = h.storage.data.get(key);
+  chunk[2] = null;
+  h.storage.data.set(key, chunk);
+  const again = harness({ unitCount: 30, storage: h.storage });
+  await again.start();
+  assert.equal(again.calls.length, 1);
+  assert.equal(again.ctrl.phase, 'ready');
+  assert.equal(again.ctrl.texts[2], '译3');
+});
+
+test('部分缓存遇到配置变化也保留，不自动花额度重翻或混用模型', async () => {
+  const h = harness();
+  await h.start();
+  h.storage.data.delete(h.chunkKeys()[0]);
+  const record = h.storage.data.get('vs:m:vid-A');
+  record.complete = false;
+  h.storage.data.set('vs:m:vid-A', record);
+  const again = harness({ storage: h.storage });
+  again.settings.textModel = 'm2';
+  await again.start();
+  assert.equal(again.calls.length, 0);
+  assert.equal(again.ctrl.phase, 'partial');
+  assert.equal(again.ctrl.staleConfig, true);
+});
+
+test('缺少 Key 时点重新翻译，报错但保留已有缓存', async () => {
+  const h = harness({ unitCount: 30 });
+  await h.start();
+  const oldKeys = h.chunkKeys();
+  h.settings.apiKeys = '';
+  await h.start({ force: true });
+  assert.equal(h.ctrl.phase, 'error');
+  assert.deepEqual(h.chunkKeys(), oldKeys);
+  assert.match(h.ctrl.error, /API Key/);
+});
+
+test('缓存原文变化但条数相同，也不能复用原来的译文', async () => {
+  const h = harness({ unitCount: 30 });
+  await h.start();
+  const src = h.storage.data.get('vs:s:vid-A:ja|asr');
+  src.units[0][2] = '原文已变更';
+  h.storage.data.set('vs:s:vid-A:ja|asr', src);
+  const again = harness({ unitCount: 30, storage: h.storage });
+  await again.start();
+  assert.equal(again.calls.length, 1);
+  assert.equal(again.ctrl.staleConfig, false);
+});
+
+test('修改背景后自动加载缓存会标记旧配置，字幕仍显示原目标语言', async () => {
+  const h = harness({ unitCount: 30 });
+  await h.start();
+  const again = harness({ unitCount: 30, storage: h.storage });
+  again.settings.manualContext = '新的背景资料';
+  await again.ctrl.onVideoChanged('vid-A', again.settings);
+  assert.equal(again.ctrl.staleConfig, true);
+  again.settings.targetLang = 'en';
+  again.ctrl.updateSettings(again.settings);
+  assert.equal(again.ctrl.status().targetLang, 'zh');
+  assert.equal(again.calls.length, 0);
 });

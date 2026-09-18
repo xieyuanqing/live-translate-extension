@@ -74,6 +74,8 @@ header .title {
   color: #d3e7fc;
 }
 
+.toggle.secondary { min-height: 32px; padding: 5px 8px; margin-bottom: 10px; }
+
 .stats {
   display: grid;
   grid-template-columns: 1.2fr 1fr 0.7fr;
@@ -156,7 +158,7 @@ textarea::placeholder { color: #778292; }
 /* 整片字幕区块（只在非直播视频页显示） */
 .vs { margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .vs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-.vs-title { font-weight: 600; }
+.vs-title { font-weight: 600; flex-shrink: 0; }
 #vsState { text-align: right; overflow-wrap: anywhere; }
 .vs-bar { height: 4px; border-radius: 2px; background: #2a2a2a; overflow: hidden; margin-bottom: 8px; }
 .vs-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.3s ease; }

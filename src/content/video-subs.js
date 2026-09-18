@@ -26,6 +26,22 @@ globalThis.LT = globalThis.LT || {};
   const unpack = (rows) => rows.map((r, i) => ({ id: i + 1, start: r[0], end: r[1], text: r[2] }));
   const langBase = (code) => String(code || '').toLowerCase().split('-')[0];
   const TINY_RE = /^[[［(（].*[\]］)）]$/;
+  const validSource = (src) => !!src && src.segVersion === LT.SUBS.SEG_VERSION &&
+    Array.isArray(src.units) && src.units.length > 0 && src.units.every((r, i, rows) =>
+      Array.isArray(r) && Number.isFinite(r[0]) && Number.isFinite(r[1]) &&
+      r[0] >= 0 && r[1] >= r[0] && typeof r[2] === 'string' && !!r[2].trim() &&
+      (!i || r[0] >= rows[i - 1][0]));
+  const validTexts = (arr, count) => Array.isArray(arr) && arr.length === count &&
+    Array.from(arr).every(t => typeof t === 'string' && !!t.trim());
+  const settingsHash = (settings) => {
+    const config = LT.TextModel.resolve(settings);
+    return LT.SubsCache.fingerprint({
+      sourceLang: settings.sourceLang, targetLang: settings.targetLang,
+      scene: LT.Settings.scene(settings), useMetadata: settings.useMetadata,
+      metadataLimit: settings.metadataLimit, manualContext: settings.manualContext,
+      apiType: config.apiType, baseUrl: config.baseUrl, model: config.model,
+    });
+  };
 
   class VideoSubsController {
     /** @param {{caption:object, getVideo:()=>object|null, onStatus:()=>void}} deps */
@@ -104,7 +120,8 @@ globalThis.LT = globalThis.LT || {};
         cachedComplete: this.cachedComplete,
         saveError: this.saveError,
         requests: this.requests,
-        model: this.config ? this.config.model : '',
+        model: this.meta ? this.meta.model : this.config ? this.config.model : '',
+        targetLang: this.meta ? this.meta.targetLang : '',
       };
     }
 
@@ -154,35 +171,59 @@ globalThis.LT = globalThis.LT || {};
       if (gen !== this.generation) return;
       this.hasCache = !!meta;
       this.cachedComplete = !!(meta && meta.complete);
-      if (meta && settings && settings.autoShowCached) await this.loadCached(meta, gen);
+      if (meta && settings && settings.autoShowCached) {
+        const loaded = await this.loadCached(meta, gen);
+        if (gen !== this.generation) return;
+        if (!loaded) this.cachedComplete = false;
+        else this.updateSettings(settings);
+      }
       if (gen !== this.generation) return;
       this.emit();
     }
 
+    /** 展示缓存实际对应的配置；修改设置只标记差异，不自动发请求。 */
+    updateSettings(settings) {
+      const meta = this.meta;
+      if (!meta || !['ready', 'partial', 'error'].includes(this.phase)) return;
+      this.staleConfig = meta.settingsHash
+        ? meta.settingsHash !== settingsHash(settings)
+        : meta.targetLang !== settings.targetLang || meta.sourceLang !== settings.sourceLang ||
+          meta.model !== settings.textModel || meta.apiType !== settings.textApiType;
+      this.emit();
+    }
+
     async loadCached(meta, gen) {
-      if (!meta || !Array.isArray(meta.chunks) || !meta.trackKey) return;
+      if (!meta || !Array.isArray(meta.chunks) || !meta.chunks.length || !meta.trackKey) return false;
       let src;
       let arrays;
       try {
         src = await LT.SubsCache.getSource(meta.videoId, meta.trackKey);
         arrays = await LT.SubsCache.getChunks(meta.videoId, meta.fp, meta.chunks.length);
       } catch (_) {
-        return;
+        return false;
       }
-      if (gen !== this.generation || !src || !Array.isArray(src.units)) return;
+      if (gen !== this.generation || !validSource(src) || meta.unitCount !== src.units.length ||
+          (meta.sourceHash && meta.sourceHash !== LT.SubsCache.fingerprint(src.units))) return false;
+      let next = 0;
+      for (const chunk of meta.chunks) {
+        if (!Array.isArray(chunk) || chunk[0] !== next || !Number.isInteger(chunk[1]) ||
+            chunk[1] < next || chunk[1] >= src.units.length) return false;
+        next = chunk[1] + 1;
+      }
+      if (next !== src.units.length) return false;
       const units = unpack(src.units);
       const texts = new Array(units.length);
       const states = meta.chunks.map(() => 'pending');
       meta.chunks.forEach(([from, to], i) => {
         const a = arrays[i];
-        if (Array.isArray(a) && a.length === to - from + 1) {
+        if (validTexts(a, to - from + 1)) {
           a.forEach((t, k) => {
             texts[from + k] = t;
           });
           states[i] = 'done';
         }
       });
-      if (!states.some((s) => s === 'done')) return;
+      if (!states.some((s) => s === 'done')) return false;
       Object.assign(this, {
         units,
         texts,
@@ -196,7 +237,9 @@ globalThis.LT = globalThis.LT || {};
         fromCache: true,
       });
       this.phase = states.every((s) => s === 'done') ? 'ready' : 'partial';
+      this.cachedComplete = this.phase === 'ready';
       this.lastIdx = -2;
+      return true;
     }
 
     /** 直播会话开始时让位：取消任务并隐藏显示。 */
@@ -233,8 +276,9 @@ globalThis.LT = globalThis.LT || {};
     async clearCache() {
       const videoId = this.videoId;
       this.cancel();
+      const gen = this.generation;
       await LT.SubsCache.removeVideo(videoId);
-      if (videoId !== this.videoId) return;
+      if (gen !== this.generation || videoId !== this.videoId) return;
       this.reset(videoId);
       this.caption.showTimed('', '');
       this.emit();
@@ -274,8 +318,10 @@ globalThis.LT = globalThis.LT || {};
 
       try {
         const config = LT.TextModel.resolve(settings);
-        if (!config.key) throw new Error('未配置 API Key，请在扩展设置里填写');
-        if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
+        const requireModel = () => {
+          if (!config.key) throw new Error('未配置 API Key，请在扩展设置里填写');
+          if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
+        };
 
         // ---- 1. 原文：优先缓存里的，没有再读 YouTube ----
         let cachedMeta = (await LT.SubsCache.getMeta(videoId)) || null;
@@ -288,9 +334,7 @@ globalThis.LT = globalThis.LT || {};
           const src = await LT.SubsCache.getSource(videoId, cachedMeta.trackKey);
           if (!alive()) return;
           const fits =
-            src &&
-            Array.isArray(src.units) &&
-            src.segVersion === LT.SUBS.SEG_VERSION &&
+            validSource(src) &&
             (settings.sourceLang === 'auto' || langBase(src.lang) === langBase(settings.sourceLang));
           if (fits) {
             units = unpack(src.units);
@@ -300,16 +344,14 @@ globalThis.LT = globalThis.LT || {};
           }
         }
         if (!units) {
+          // 原文失效后编号可能完全变化，不能走「旧设置缓存」的复用路径。
+          cachedMeta = null;
           const read = await this.readTrack(videoId, settings, alive);
           if (!read) return;
           ({ units, trackKey, trackLabel, isAsr } = read);
-          if (cachedMeta && cachedMeta.trackKey !== trackKey) {
-            // 换了字幕轨，旧译文对不上新编号
-            await LT.SubsCache.removeChunks(videoId);
-            if (!alive()) return;
-            cachedMeta = null;
-          }
         }
+        const sourceHash = LT.SubsCache.fingerprint(pack(units));
+        if (cachedMeta && cachedMeta.sourceHash && cachedMeta.sourceHash !== sourceHash) cachedMeta = null;
 
         // ---- 2. 提示词与配置指纹 ----
         const scene = LT.Settings.scene(settings);
@@ -329,8 +371,10 @@ globalThis.LT = globalThis.LT || {};
           seg: LT.SUBS.SEG_VERSION,
           chunk: [LT.SUBS.CHUNK_UNITS, LT.SUBS.CHUNK_CHARS],
           trackKey,
+          sourceHash,
           targetLang: settings.targetLang,
           apiType: config.apiType,
+          baseUrl: config.baseUrl,
           model: config.model,
           system,
         });
@@ -342,25 +386,26 @@ globalThis.LT = globalThis.LT || {};
         });
         let cachedChunks = [];
         if (cachedMeta && cachedMeta.fp && cachedMeta.fp !== fp) {
-          if (!force && cachedMeta.complete && cachedMeta.trackKey === trackKey) {
-            // 旧设置的完整缓存：直接用并标明，不悄悄重翻消耗额度
-            await this.loadCached(cachedMeta, gen);
+          if (!force && cachedMeta.trackKey === trackKey) {
+            // 旧设置缓存继续显示，部分缓存也不能混入新配置的译文。
+            const loaded = await this.loadCached(cachedMeta, gen);
             if (!alive()) return;
-            if (this.units) {
+            if (loaded) {
               this.staleConfig = true;
               this.hasCache = true;
-              this.cachedComplete = true;
               this.config = config;
               this.note('流译：已加载旧设置翻译的缓存字幕', 'ok', true);
               this.emit();
               return;
             }
           }
+          requireModel();
           await LT.SubsCache.removeChunks(videoId);
           if (!alive()) return;
           cachedMeta = null;
         } else if (cachedMeta && cachedMeta.fp === fp) {
           if (force) {
+            requireModel();
             await LT.SubsCache.removeChunks(videoId);
           } else {
             cachedChunks = await LT.SubsCache.getChunks(videoId, fp, chunks.length);
@@ -371,13 +416,14 @@ globalThis.LT = globalThis.LT || {};
         const texts = new Array(units.length);
         const states = chunks.map(() => 'pending');
         cachedChunks.forEach((arr, i) => {
-          if (Array.isArray(arr) && arr.length === chunks[i].to - chunks[i].from + 1) {
+          if (chunks[i] && validTexts(arr, chunks[i].to - chunks[i].from + 1)) {
             arr.forEach((t, k) => {
               texts[chunks[i].from + k] = t;
             });
             states[i] = 'done';
           }
         });
+        if (!states.every(s => s === 'done')) requireModel();
         Object.assign(this, {
           units,
           texts,
@@ -400,6 +446,9 @@ globalThis.LT = globalThis.LT || {};
           trackKey,
           trackLabel,
           sourceLang: settings.sourceLang,
+          sourceHash,
+          segVersion: LT.SUBS.SEG_VERSION,
+          settingsHash: settingsHash(settings),
           targetLang: settings.targetLang,
           fp,
           apiType: config.apiType,
@@ -414,7 +463,7 @@ globalThis.LT = globalThis.LT || {};
         this.meta = record;
         this.cachedComplete = record.complete;
         await LT.SubsCache.setMeta(record).catch((err) => {
-          this.saveError = err && err.message ? err.message : '缓存写入失败';
+          if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
         });
         if (!alive()) return;
 
@@ -440,7 +489,7 @@ globalThis.LT = globalThis.LT || {};
         for (let i = 0; i < n; i++) workers.push(this.worker(gen, alive));
         await Promise.all(workers);
         if (!alive()) return;
-        await this.finish();
+        await this.finish(alive);
       } catch (err) {
         if (!alive() || isAbort(err)) return;
         console.error('[流译] 整片字幕失败', err);
@@ -488,17 +537,18 @@ globalThis.LT = globalThis.LT || {};
         segVersion: LT.SUBS.SEG_VERSION,
         units: pack(units),
       }).catch((err) => {
-        this.saveError = err && err.message ? err.message : '缓存写入失败';
+        if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
       });
       if (!alive()) return null;
       console.info(`[流译] 字幕轨 ${trackLabel}：${events.length} 段 → ${units.length} 条（来源 ${res.source}）`);
       return { units, trackKey, trackLabel, isAsr };
     }
 
-    async finish() {
+    async finish(alive) {
       let failed = 0;
       for (const s of this.states) if (s === 'failed') failed++;
       if (this.fatal) {
+        this.states = this.states.map(s => s === 'running' ? 'pending' : s);
         this.phase = 'error';
         this.error = this.fatal.message;
         this.fatal = null;
@@ -512,9 +562,10 @@ globalThis.LT = globalThis.LT || {};
           try {
             await LT.SubsCache.setMeta(this.meta);
           } catch (err) {
-            this.saveError = err && err.message ? err.message : '缓存写入失败';
+            if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
           }
         }
+        if (!alive()) return;
         this.note(this.saveError ? '流译：整片字幕已就绪（缓存未保存）' : '流译：整片字幕已就绪', 'ok', true);
       } else {
         this.phase = 'partial';
@@ -547,8 +598,9 @@ globalThis.LT = globalThis.LT || {};
             try {
               await LT.SubsCache.setChunk(this.videoId, this.fp, idx, this.texts.slice(chunk.from, chunk.to + 1));
             } catch (err) {
-              this.saveError = err && err.message ? err.message : '缓存写入失败';
+              if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
             }
+            if (!alive()) return;
           } else {
             this.states[idx] = 'failed';
           }
@@ -579,6 +631,7 @@ globalThis.LT = globalThis.LT || {};
       for (;;) {
         if (!alive()) throw abortError();
         await this.waitCooldown(alive);
+        if (!alive()) throw abortError();
         const ctx = LT.Chunker.context(this.units, from, to, LT.SUBS.CONTEXT_UNITS);
         let res;
         try {
@@ -655,6 +708,7 @@ globalThis.LT = globalThis.LT || {};
     }
 
     async request(user) {
+      if (this.fatal) throw this.fatal;
       const ac = new AbortController();
       this.controllers.add(ac);
       this.requests++;

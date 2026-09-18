@@ -28,7 +28,7 @@
           <span class="vs-title">整片字幕</span>
           <span id="vsState" class="muted small">—</span>
         </div>
-        <div class="vs-bar"><i id="vsProgress"></i></div>
+        <div class="vs-bar" id="vsProgressBar" role="progressbar" aria-label="整片字幕翻译进度" aria-valuemin="0" aria-valuemax="100"><i id="vsProgress"></i></div>
         <div class="vs-actions">
           <button class="primary" id="vsStart">翻译整片字幕</button>
           <button id="vsCancel" class="hidden">取消翻译</button>
@@ -41,6 +41,7 @@
       <button class="primary toggle" id="toggle">开始实时翻译</button>
       <button class="toggle hidden" id="reloadPage">刷新页面，重新连接插件</button>
 
+      <div id="liveDetails" class="hidden">
       <div class="stats">
         <div class="stat connection"><span class="muted">状态</span><span id="stConn" aria-live="polite">—</span></div>
         <div class="stat"><span class="muted">方向</span><span id="stDir">—</span></div>
@@ -51,6 +52,7 @@
       <div class="level-wrap">
         <span class="muted small">输入音量</span>
         <div class="level"><i id="level"></i></div>
+      </div>
       </div>
 
       <div class="quick">

@@ -41,6 +41,7 @@ globalThis.LT = globalThis.LT || {};
   let userStoppedFor = '';
   let gateHint = ''; // applyGate 自己挂上去的提示，条件消失后要由它负责收掉
   let sessionGeneration = 0; // 停止后作废仍在等待播放器 / 音频挂载的启动操作
+  let videoStartPending = false; // 读取设置也属于可取消的整片字幕启动过程
   // 本场临时补充（弹窗输入）：只活在内容脚本内存里，不进 storage，
   // 换视频 / 刷新页面即消失。开始翻译时冻结进快照，运行中改动要重开一场才生效。
   let tempContext = '';
@@ -68,7 +69,7 @@ globalThis.LT = globalThis.LT || {};
       usedMetadata: session.snapshot ? !!session.snapshot.metaUsed : false,
       usedTemp: session.snapshot ? !!session.snapshot.tempUsed : false,
       tempContext,
-      video: videoSubs.status(),
+      video: videoStartPending ? { ...videoSubs.status(), phase: 'reading' } : videoSubs.status(),
     };
   }
 
@@ -119,6 +120,7 @@ globalThis.LT = globalThis.LT || {};
 
   async function start(reason) {
     if (session.phase !== 'idle') return;
+    videoStartPending = false;
     videoSubs.deactivate(); // 实时翻译和整片字幕共用字幕层，开始实时翻译时整片字幕让位
     const generation = ++sessionGeneration;
     const videoId = LT.YouTube.videoIdFromUrl();
@@ -275,6 +277,7 @@ globalThis.LT = globalThis.LT || {};
 
   async function stop() {
     sessionGeneration++;
+    videoStartPending = false;
     if (session.phase === 'idle') return;
     teardown();
     session.phase = 'idle';
@@ -338,7 +341,7 @@ globalThis.LT = globalThis.LT || {};
     currentVideoId = id;
     currentMeta = null;
     tempContext = ''; // 临时补充跟着视频走，换视频即作废
-    if (session.phase !== 'idle') await stop();
+    stop(); // 同步作废待启动操作，不能在换视频处理中留下异步空档
     videoSubs.onVideoChanged(id, settings); // 作废旧任务；有缓存会按设置自动加载
     ensureMounted();
     if (!id) {
@@ -390,6 +393,7 @@ globalThis.LT = globalThis.LT || {};
         LT.Settings.load().then((s) => {
           settings = s;
           caption.applySettings(s);
+          videoSubs.updateSettings(s);
         });
         break;
       case LT.MSG.SET_TEMP_CONTEXT:
@@ -400,12 +404,17 @@ globalThis.LT = globalThis.LT || {};
         startVideoSubs(!!(msg.payload && msg.payload.force));
         break;
       case LT.MSG.VS_CANCEL:
+        if (videoStartPending) sessionGeneration++;
+        videoStartPending = false;
         videoSubs.cancel();
+        pushStatus();
         break;
       case LT.MSG.VS_SET_VISIBLE:
         videoSubs.setVisible(!!msg.payload);
         break;
       case LT.MSG.VS_CLEAR:
+        if (videoStartPending) sessionGeneration++;
+        videoStartPending = false;
         videoSubs.clearCache().then(
           () => sendResponse({ ok: true }),
           (err) => sendResponse({ ok: false, error: err && err.message })
@@ -419,14 +428,36 @@ globalThis.LT = globalThis.LT || {};
 
   /** 整片字幕：读取当前设置作为本次任务的快照；正在实时翻译就先停掉。 */
   async function startVideoSubs(force) {
-    const runSettings = await LT.Settings.load();
-    settings = runSettings;
-    if (session.phase !== 'idle') await stop();
-    videoSubs.start({ settings: runSettings, meta: currentMeta, tempContext, force });
+    if (videoStartPending || ['reading', 'translating'].includes(videoSubs.status().phase)) return;
+    const videoId = LT.YouTube.videoIdFromUrl();
+    if (!videoId || !LT.YouTube.isWatchPage() || (currentMeta?.videoId === videoId && currentMeta.isLive)) return;
+    stop();
+    const generation = ++sessionGeneration;
+    const isCurrent = () => generation === sessionGeneration && videoId === LT.YouTube.videoIdFromUrl();
+    const runMeta = currentMeta?.videoId === videoId ? currentMeta : null;
+    const runTempContext = currentVideoId === videoId ? tempContext : '';
+    videoStartPending = true;
+    pushStatus();
+    try {
+      const runSettings = await LT.Settings.load();
+      if (!isCurrent()) return;
+      settings = runSettings;
+      videoStartPending = false;
+      await videoSubs.start({ settings: runSettings, meta: runMeta, tempContext: runTempContext, force });
+    } catch (err) {
+      if (!isCurrent()) return;
+      videoSubs.phase = 'error';
+      videoSubs.error = `读取设置失败：${err && err.message ? err.message : '请重新加载扩展并刷新页面'}`;
+    } finally {
+      if (isCurrent()) {
+        videoStartPending = false;
+        pushStatus();
+      }
+    }
   }
 
   window.addEventListener('pagehide', () => {
-    if (session.phase !== 'idle') stop();
+    stop();
     videoSubs.cancel();
   });
 

@@ -66,7 +66,7 @@
           </div>
           <div class="field">
             <span class="label">模型名</span>
-            <input type="text" id="textModel" placeholder="例：gemini-3.5-flash" />
+            <input type="text" id="textModel" placeholder="填写你的接口实际支持的模型名" />
           </div>
         </div>
         <div class="field">
@@ -115,7 +115,7 @@
           <textarea id="manualContext" rows="4" placeholder="例：ホロライブ 相关名字统一用官方中文译名；「にゃっはろ〜」保留原文不翻。"></textarea>
         </div>
         <p class="muted small">
-          标题和简介是任何人都能写的文本，会被当作不可信资料用围栏包起来送给模型，模型不会执行里面的指令。
+          标题和简介会作为不可信资料交给模型，提示词会提醒模型只参考资料、不执行其中的指令，但无法保证绝对有效。
         </p>
       </section>
 
