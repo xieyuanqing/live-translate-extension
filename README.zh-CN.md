@@ -7,6 +7,22 @@
 
 **开发版：0.2.0，尚未发布。** 本仓库是独立的 Chrome Manifest V3 扩展，界面目前为简体中文。暂时使用手动安装，尚未上架浏览器扩展商店。
 
+## 界面预览
+
+以下截图来自项目内置的离线预览，不含 API Key，也没有字幕缓存。
+
+### 字幕外观
+
+![字幕外观设置](docs/screenshots/settings-captions.jpg)
+
+### 文字模型
+
+![文字模型设置](docs/screenshots/settings-models.jpg)
+
+### 整片字幕
+
+![整片字幕设置](docs/screenshots/settings-video.jpg)
+
 ## 功能
 
 **直播（音频实时翻译）**
