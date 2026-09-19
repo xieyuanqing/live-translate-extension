@@ -17,7 +17,7 @@ const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve()
 async function sessionHarness() {
   const video = { paused: false, muted: false, volume: 1 };
   const player = {};
-  const clients = [], taps = [], statuses = [];
+  const clients = [], taps = [], statuses = [], subStarts = [];
   let messageHandler, navigate;
   let videoId = 'video-A';
   const ctx = vm.createContext({ console: quiet, Date, setInterval() {},
@@ -43,6 +43,10 @@ async function sessionHarness() {
     pushCommitted() {} setCurrent() {} setSource() {} render() {}
   };
   LT.SubtitleStabilizer = class { reset() {} onFragment() {} };
+  LT.VideoSubsController = class {
+    status() { return { phase: 'idle' }; } start(args) { subStarts.push(args); } cancel() {} deactivate() {}
+    onVideoChanged() {} tick() {} setVisible() {} updateSettings() {} async clearCache() {}
+  };
   LT.GeminiLiveClient = class {
     constructor(opts) { this.opts = opts; this.starts = 0; this.running = false; clients.push(this); }
     start() { this.starts++; this.running = true; } stop() { this.running = false; }
@@ -59,7 +63,7 @@ async function sessionHarness() {
   };
   load(ctx, 'src/content/main.js');
   await flush();
-  return { LT, video, clients, taps, statuses,
+  return { LT, video, clients, taps, statuses, subStarts,
     setSettings: patch => { settings = { ...settings, ...patch }; },
     message: (type, payload) => messageHandler({ type, payload }, {}, () => {}),
     navigate: id => { videoId = id; navigate(); },
@@ -140,6 +144,45 @@ test('没有 API Key 时角标收到最终空闲状态', async () => {
   await h.LT.debug.start('test');
   assert.equal(h.statuses.at(-1).phase, 'idle');
   assert.match(h.statuses.at(-1).error, /API Key/);
+});
+
+test('读取整片字幕设置时取消，旧启动不会复活', async () => {
+  const h = await sessionHarness();
+  const settings = await h.LT.Settings.load();
+  const wait = deferred();
+  h.LT.Settings.load = () => wait.promise;
+  const pending = h.LT.debug.startVideoSubs(false);
+  h.message(h.LT.MSG.VS_CANCEL);
+  wait.resolve(settings);
+  await pending;
+  assert.equal(h.subStarts.length, 0);
+});
+
+test('读取整片字幕设置时切视频，不在新视频上启动旧任务', async () => {
+  const h = await sessionHarness();
+  const settings = await h.LT.Settings.load();
+  const wait = deferred();
+  h.LT.Settings.load = () => wait.promise;
+  const pending = h.LT.debug.startVideoSubs(false);
+  h.navigate('video-B');
+  wait.resolve(settings);
+  await pending;
+  assert.equal(h.subStarts.length, 0);
+});
+
+test('整片字幕的旧设置晚到，不会停止后启动的实时翻译', async () => {
+  const h = await sessionHarness();
+  const settings = await h.LT.Settings.load();
+  const wait = deferred();
+  h.LT.Settings.load = () => wait.promise;
+  const pending = h.LT.debug.startVideoSubs(false);
+  h.LT.Settings.load = async () => settings;
+  await h.LT.debug.start('new-live');
+  wait.resolve(settings);
+  await pending;
+  assert.equal(h.subStarts.length, 0);
+  assert.equal(h.LT.debug.session.phase, 'running');
+  assert.equal(h.clients[0].running, true);
 });
 
 test('取消 AudioWorklet 加载后不再创建音频节点', async () => {

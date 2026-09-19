@@ -13,6 +13,14 @@ globalThis.LT = globalThis.LT || {};
   const caption = new LT.CaptionLayer();
   let settings = LT.DEFAULTS;
 
+  // 整片字幕（视频 / 回放）：读字幕轨、文字模型翻译、缓存、按播放时间显示。
+  // 和直播会话共用字幕层，两者互斥：开始一边就让另一边让位。
+  const videoSubs = new LT.VideoSubsController({
+    caption,
+    getVideo: () => LT.YouTube.video(),
+    onStatus: () => pushStatus(),
+  });
+
   const session = {
     phase: 'idle', // idle | starting | running
     conn: '',
@@ -33,6 +41,7 @@ globalThis.LT = globalThis.LT || {};
   let userStoppedFor = '';
   let gateHint = ''; // applyGate 自己挂上去的提示，条件消失后要由它负责收掉
   let sessionGeneration = 0; // 停止后作废仍在等待播放器 / 音频挂载的启动操作
+  let videoStartPending = false; // 读取设置也属于可取消的整片字幕启动过程
   // 本场临时补充（弹窗输入）：只活在内容脚本内存里，不进 storage，
   // 换视频 / 刷新页面即消失。开始翻译时冻结进快照，运行中改动要重开一场才生效。
   let tempContext = '';
@@ -60,6 +69,7 @@ globalThis.LT = globalThis.LT || {};
       usedMetadata: session.snapshot ? !!session.snapshot.metaUsed : false,
       usedTemp: session.snapshot ? !!session.snapshot.tempUsed : false,
       tempContext,
+      video: videoStartPending ? { ...videoSubs.status(), phase: 'reading' } : videoSubs.status(),
     };
   }
 
@@ -110,6 +120,8 @@ globalThis.LT = globalThis.LT || {};
 
   async function start(reason) {
     if (session.phase !== 'idle') return;
+    videoStartPending = false;
+    videoSubs.deactivate(); // 实时翻译和整片字幕共用字幕层，开始实时翻译时整片字幕让位
     const generation = ++sessionGeneration;
     const videoId = LT.YouTube.videoIdFromUrl();
     const runTempContext = tempContext;
@@ -202,7 +214,8 @@ globalThis.LT = globalThis.LT || {};
         listener: {
           onState: (state) => { if (isCurrent()) onConnState(state); },
           onInputText: (t) => {
-            if (!isCurrent() || !settings.showSource) return;
+            // 仅译文模式不记原文；双语和仅原文都要，显示由字幕层按模式过滤
+            if (!isCurrent() || settings.captionDisplayMode === 'translationOnly') return;
             caption.setSource(t);
             caption.render();
           },
@@ -265,12 +278,14 @@ globalThis.LT = globalThis.LT || {};
 
   async function stop() {
     sessionGeneration++;
+    videoStartPending = false;
     if (session.phase === 'idle') return;
     teardown();
     session.phase = 'idle';
     session.conn = 'stopped';
     session.error = '';
     caption.clear();
+    caption.setVisible(true); // 广告期间停止的话字幕层还藏着，整片字幕接着用得先亮回来
     caption.setStatus('', 'ok', false);
     pushStatus();
   }
@@ -327,7 +342,8 @@ globalThis.LT = globalThis.LT || {};
     currentVideoId = id;
     currentMeta = null;
     tempContext = ''; // 临时补充跟着视频走，换视频即作废
-    if (session.phase !== 'idle') await stop();
+    stop(); // 同步作废待启动操作，不能在换视频处理中留下异步空档
+    videoSubs.onVideoChanged(id, settings); // 作废旧任务；有缓存会按设置自动加载
     ensureMounted();
     if (!id) {
       pushStatus();
@@ -378,20 +394,72 @@ globalThis.LT = globalThis.LT || {};
         LT.Settings.load().then((s) => {
           settings = s;
           caption.applySettings(s);
+          videoSubs.updateSettings(s);
         });
         break;
       case LT.MSG.SET_TEMP_CONTEXT:
         tempContext = String(msg.payload || '').trim();
         sendResponse({ ok: true });
         break;
+      case LT.MSG.VS_START:
+        startVideoSubs(!!(msg.payload && msg.payload.force));
+        break;
+      case LT.MSG.VS_CANCEL:
+        if (videoStartPending) sessionGeneration++;
+        videoStartPending = false;
+        videoSubs.cancel();
+        pushStatus();
+        break;
+      case LT.MSG.VS_SET_VISIBLE:
+        videoSubs.setVisible(!!msg.payload);
+        break;
+      case LT.MSG.VS_CLEAR:
+        if (videoStartPending) sessionGeneration++;
+        videoStartPending = false;
+        videoSubs.clearCache().then(
+          () => sendResponse({ ok: true }),
+          (err) => sendResponse({ ok: false, error: err && err.message })
+        );
+        return true;
       default:
         break;
     }
     return undefined;
   });
 
+  /** 整片字幕：读取当前设置作为本次任务的快照；正在实时翻译就先停掉。 */
+  async function startVideoSubs(force) {
+    if (videoStartPending || ['reading', 'translating'].includes(videoSubs.status().phase)) return;
+    const videoId = LT.YouTube.videoIdFromUrl();
+    if (!videoId || !LT.YouTube.isWatchPage() || (currentMeta?.videoId === videoId && currentMeta.isLive)) return;
+    stop();
+    const generation = ++sessionGeneration;
+    const isCurrent = () => generation === sessionGeneration && videoId === LT.YouTube.videoIdFromUrl();
+    const runMeta = currentMeta?.videoId === videoId ? currentMeta : null;
+    const runTempContext = currentVideoId === videoId ? tempContext : '';
+    videoStartPending = true;
+    pushStatus();
+    try {
+      const runSettings = await LT.Settings.load();
+      if (!isCurrent()) return;
+      settings = runSettings;
+      videoStartPending = false;
+      await videoSubs.start({ settings: runSettings, meta: runMeta, tempContext: runTempContext, force });
+    } catch (err) {
+      if (!isCurrent()) return;
+      videoSubs.phase = 'error';
+      videoSubs.error = `读取设置失败：${err && err.message ? err.message : '请重新加载扩展并刷新页面'}`;
+    } finally {
+      if (isCurrent()) {
+        videoStartPending = false;
+        pushStatus();
+      }
+    }
+  }
+
   window.addEventListener('pagehide', () => {
-    if (session.phase !== 'idle') stop();
+    stop();
+    videoSubs.cancel();
   });
 
   LT.YouTube.onMetaPush((meta) => {
@@ -409,6 +477,8 @@ globalThis.LT = globalThis.LT || {};
     ensureMounted();
     applyGate();
   }, 500);
+  // 整片字幕按播放时间挑当前条；200ms 足够跟上一般字幕的节奏
+  setInterval(() => videoSubs.tick(), 200);
 
   (async () => {
     settings = await LT.Settings.load();
@@ -416,6 +486,48 @@ globalThis.LT = globalThis.LT || {};
     await handleVideoChanged();
   })();
 
-  // 方便在控制台手动调试：LT.debug.start() / LT.debug.stop()
-  LT.debug = { start, stop, session, status: statusSnapshot };
+  /**
+   * 诊断：只走读轨与解析，不调用模型、不写缓存、不改任务状态。
+   * 真机验证第一步在内容脚本的控制台跑 await LT.debug.probeCaptions()，把返回对象整个复制下来。
+   */
+  async function probeCaptions() {
+    const t0 = Date.now();
+    const clock = LT.fmtClock || ((ms) => String(ms));
+    const out = { videoId: LT.YouTube.videoIdFromUrl(), sourceLang: settings.sourceLang };
+    const info = await LT.YouTube.captionTracks();
+    if (!info) return { ...out, error: '播放器没就绪或页面桥没响应' };
+    Object.assign(out, {
+      tracks: info.tracks.map((t) => ({ languageCode: t.languageCode, kind: t.kind, vssId: t.vssId, name: t.name })),
+      defaultIndex: info.defaultIndex,
+      selected: info.selected,
+      hasPot: info.hasPot,
+    });
+    const track = LT.YouTube.chooseTrack(info.tracks, settings.sourceLang, info.defaultIndex, info.selected);
+    if (!track) return { ...out, error: info.tracks.length ? '没有匹配「听什么」的字幕轨' : '这个视频没有字幕轨' };
+    out.chosen = { languageCode: track.languageCode, kind: track.kind, vssId: track.vssId, name: track.name };
+    const res = await LT.YouTube.fetchCaptions({
+      videoId: info.videoId,
+      languageCode: track.languageCode,
+      kind: track.kind,
+      vssId: track.vssId,
+      baseUrl: track.baseUrl,
+    });
+    out.ms = Date.now() - t0;
+    if (!res) return { ...out, error: '页面桥 25 秒内没有回复' };
+    Object.assign(out, { source: res.source, error: res.error, tried: res.tried });
+    if (res.text) {
+      const isAsr = track.kind === 'asr';
+      out.format = LT.Json3.detectFormat(res.text);
+      out.bytes = res.text.length;
+      const events = LT.Json3.parse(res.text);
+      const units = LT.Segmenter.build(events, { isAsr, lang: track.languageCode });
+      out.eventCount = events.length;
+      out.unitCount = units.length;
+      out.sampleUnits = units.slice(0, 8).map((u) => `${clock(u.start)}–${clock(u.end)} ${u.text}`);
+    }
+    return out;
+  }
+
+  // 方便在控制台手动调试：LT.debug.start() / LT.debug.stop() / LT.debug.videoSubs / LT.debug.probeCaptions()
+  LT.debug = { start, stop, session, status: statusSnapshot, videoSubs, startVideoSubs, probeCaptions };
 })();

@@ -1,3 +1,7 @@
+/**
+ * 设置页总控：分区导航、简单字段绑定、场景库、提示词预览、字幕缓存。
+ * 文字模型卡片、字幕外观预览、导入导出分别在 options-providers.js / options-style.js / options-data.js。
+ */
 (() => {
   const LT = globalThis.LT;
   const $ = (id) => document.getElementById(id);
@@ -5,25 +9,15 @@
   let settings = LT.DEFAULTS;
   let saveTimer = null;
 
-  const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'manualContext'];
-  const SELECT_FIELDS = ['sourceLang', 'targetLang'];
-  const CHECK_FIELDS = [
-    'autoStartLive',
-    'pauseOnAd',
-    'useMetadata',
-    'showSource',
-    'echoTargetLanguage',
-  ];
-  const RANGE_FIELDS = [
-    'metadataLimit',
-    'captionLines',
-    'captionScale',
-    'captionBottom',
-    'captionOpacity',
-    'rotateSeconds',
-    'stabIdleMs',
-    'stabMaxChars',
-  ];
+  const PAGES = ['general', 'live', 'video', 'models', 'style', 'data', 'about'];
+  const PAGE_KEY = 'lt-options-page';
+  const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'manualContext', 'subsExtraInstruction'];
+  const SELECT_OPTIONS = {
+    sourceLang: LT.SOURCE_LANGS,
+    targetLang: LT.TARGET_LANGS,
+  };
+  const CHECK_FIELDS = ['autoStartLive', 'pauseOnAd', 'useMetadata', 'echoTargetLanguage', 'autoShowCached'];
+  const RANGE_FIELDS = ['metadataLimit', 'rotateSeconds', 'stabIdleMs', 'stabMaxChars'];
 
   // ---------- 保存 ----------
 
@@ -56,14 +50,79 @@
   function queueSave(patch) {
     Object.assign(settings, patch);
     renderPreview();
+    renderProviderSelect();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
-      // 不要用返回值覆盖 settings：场景卡片的事件闭包持有当前这些对象引用，
+      // 不要用返回值覆盖 settings：场景与接口配置卡片的事件闭包持有当前这些对象引用，
       // 换成存储里反序列化出来的新对象后，下一次输入就会写丢。
       await LT.Settings.save(settings);
       flashSaved();
       notifyTabs();
     }, 250);
+  }
+
+  /** 导入 / 恢复默认：整体写入后重载页面，所有卡片重新建立。 */
+  async function replaceSettings(next) {
+    clearTimeout(saveTimer);
+    await LT.Settings.save(next);
+    notifyTabs();
+    location.reload();
+  }
+
+  // ---------- 分区导航 ----------
+
+  function showPage(name) {
+    let page = name;
+    if (!PAGES.includes(page)) {
+      try {
+        page = localStorage.getItem(PAGE_KEY) || 'general';
+      } catch (_) {
+        page = 'general';
+      }
+      if (!PAGES.includes(page)) page = 'general';
+    }
+    for (const el of document.querySelectorAll('.page')) el.classList.toggle('active', el.dataset.page === page);
+    for (const a of document.querySelectorAll('.nav a')) {
+      if (a.getAttribute('href') === `#${page}`) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    }
+    try {
+      localStorage.setItem(PAGE_KEY, page);
+    } catch (_) {
+      /* 无痕模式等 */
+    }
+    if (page === 'style') style.refresh(); // 隐藏时容器宽度为 0，显示后重算字号
+    if (page === 'data') renderCache();
+  }
+
+  // ---------- 子模块 ----------
+
+  const providers = LT.OptionsUI.mountProviders({
+    box: $('providers'),
+    settings: () => settings,
+    save: () => queueSave({}),
+    select: (id) => queueSave({ subsProviderId: id }),
+  });
+  const style = LT.OptionsUI.mountStyle({ $, settings: () => settings, save: queueSave });
+  LT.OptionsUI.mountData({
+    $,
+    settings: () => settings,
+    replace: replaceSettings,
+    version: chrome.runtime.getManifest().version,
+  });
+
+  // ---------- 整片字幕：选用的接口配置 ----------
+
+  function renderProviderSelect() {
+    const el = $('subsProviderId');
+    el.replaceChildren();
+    for (const p of settings.providers) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name || (LT.TEXT_API_TYPES.find((t) => t.code === p.apiType) || {}).label || p.apiType;
+      el.appendChild(opt);
+    }
+    el.value = settings.subsProviderId;
   }
 
   // ---------- 场景库 ----------
@@ -156,6 +215,85 @@
       metadataText,
       manualContext: settings.manualContext,
     });
+    $('previewSubs').textContent = LT.Prompt.buildSubs({
+      scene,
+      sourceLang: settings.sourceLang,
+      targetLang: settings.targetLang,
+      isAsr: true,
+      metadataText: settings.useMetadata
+        ? LT.Prompt.formatMetadata({ ...sampleMeta, isLive: false }, settings.metadataLimit)
+        : '',
+      manualContext: settings.manualContext,
+      extraInstruction: settings.subsExtraInstruction,
+    });
+  }
+
+  // ---------- 字幕缓存 ----------
+
+  function fmtBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  async function renderCache() {
+    const box = $('cacheList');
+    box.replaceChildren();
+    let index = {};
+    let bytes = 0;
+    try {
+      index = await LT.SubsCache.listIndex();
+      bytes = await LT.SubsCache.bytesInUse();
+    } catch (_) {
+      box.textContent = '读取缓存失败';
+      return;
+    }
+    const entries = Object.entries(index).sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0));
+    $('cacheTotal').textContent = entries.length
+      ? `共 ${entries.length} 个视频 · 约 ${fmtBytes(bytes)}`
+      : '还没有缓存';
+    $('clearCache').disabled = entries.length === 0;
+    for (const [videoId, item] of entries) {
+      const row = document.createElement('div');
+      row.className = 'cache-item';
+
+      const info = document.createElement('div');
+      info.className = 'cache-info';
+      const title = document.createElement('div');
+      title.className = 'cache-title';
+      title.textContent = item.title || videoId;
+      const meta = document.createElement('div');
+      meta.className = 'muted small';
+      meta.textContent = [
+        item.trackLabel ? `${item.trackLabel} → ${LT.targetLabel(item.targetLang)}` : LT.targetLabel(item.targetLang),
+        item.complete ? '完整' : '部分',
+        item.unitCount ? `${item.unitCount} 条` : '',
+        item.model || '',
+        item.updatedAt ? new Date(item.updatedAt).toLocaleString() : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      info.append(title, meta);
+
+      const open = document.createElement('a');
+      open.href = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+      open.target = '_blank';
+      open.rel = 'noopener';
+      open.textContent = '打开';
+      open.className = 'small';
+
+      const del = document.createElement('button');
+      del.className = 'danger small';
+      del.textContent = '删除';
+      del.addEventListener('click', async () => {
+        if (!confirm(`删除「${item.title || videoId}」的字幕缓存？`)) return;
+        await LT.SubsCache.removeVideo(videoId);
+        renderCache();
+      });
+
+      row.append(info, open, del);
+      box.appendChild(row);
+    }
   }
 
   // ---------- 绑定 ----------
@@ -172,14 +310,13 @@
       el.addEventListener('input', () => queueSave({ [id]: el.value }));
     }
 
-    for (const id of SELECT_FIELDS) {
+    for (const [id, list] of Object.entries(SELECT_OPTIONS)) {
       const el = $(id);
-      const list = id === 'sourceLang' ? LT.SOURCE_LANGS : LT.TARGET_LANGS;
       el.replaceChildren();
-      for (const lang of list) {
+      for (const item of list) {
         const opt = document.createElement('option');
-        opt.value = lang.code;
-        opt.textContent = lang.label;
+        opt.value = item.code;
+        opt.textContent = item.label;
         el.appendChild(opt);
       }
       el.value = settings[id];
@@ -197,12 +334,24 @@
       el.value = settings[id];
       syncRangeLabel(id);
       el.addEventListener('input', () => {
-        const v = id === 'captionScale' ? parseFloat(el.value) : parseInt(el.value, 10);
+        const v = parseInt(el.value, 10);
         settings[id] = v;
         syncRangeLabel(id);
         queueSave({ [id]: v });
       });
     }
+
+    renderProviderSelect();
+    $('subsProviderId').addEventListener('change', () => {
+      queueSave({ subsProviderId: $('subsProviderId').value });
+      providers.render();
+    });
+
+    $('addProvider').addEventListener('click', () => {
+      settings.providers.push(LT.Settings.newProvider({}));
+      queueSave({});
+      providers.render();
+    });
 
     $('addScene').addEventListener('click', () => {
       settings.scenes.push({
@@ -221,12 +370,29 @@
       queueSave({});
       renderScenes();
     });
+
+    $('refreshCache').addEventListener('click', renderCache);
+    $('clearCache').addEventListener('click', async () => {
+      if (!confirm('清空全部字幕缓存？已翻译的视频下次要重新调用模型。')) return;
+      await LT.SubsCache.clearAll();
+      renderCache();
+    });
+
+    $('version').textContent = chrome.runtime.getManifest().version;
+    $('openShortcuts').addEventListener('click', () => {
+      chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+    });
+
+    window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
   }
 
   (async () => {
     settings = await LT.Settings.load();
     bind();
+    providers.render();
+    style.bind();
     renderScenes();
     renderPreview();
+    showPage(location.hash.slice(1));
   })();
 })();

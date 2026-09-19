@@ -25,4 +25,4 @@ const files = [...scripts(path.join(ROOT, 'src')), ...scripts(__dirname)];
 for (const file of files) run(['--check', file]);
 console.log(`语法检查通过：${files.length} 个文件；版本 ${manifest.version}`);
 run(['tools/selftest.js']);
-run(['--test', 'tools/lifecycle.test.js']);
+run(['--test', 'tools/lifecycle.test.js', 'tools/video-subs.test.js', 'tools/subs-net.test.js', 'tools/page-bridge.test.js', 'tools/youtube.test.js', 'tools/options-ui.test.js']);

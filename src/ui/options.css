@@ -1,18 +1,92 @@
-.wrap {
-  max-width: 760px;
+/* 设置页布局：左栏导航 + 右侧分区；窄屏时导航变成顶部横向标签条 */
+
+.layout {
+  max-width: 980px;
   margin: 0 auto;
   padding: 20px 16px 60px;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  grid-template-areas:
+    'top top'
+    'nav pages';
+  column-gap: 24px;
 }
 
-header {
+.top {
+  grid-area: top;
   display: flex;
   align-items: baseline;
   gap: 10px;
   margin-bottom: 16px;
 }
 
-header h1 {
+.top h1 {
   font-size: 19px;
+}
+
+.nav {
+  grid-area: nav;
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: var(--fg);
+  text-decoration: none;
+  border: 1px solid transparent;
+}
+
+.nav a:hover {
+  background: #222;
+}
+
+.nav a[aria-current='page'] {
+  background: #12202b;
+  border-color: #2d5b86;
+  color: #d7ecff;
+}
+
+.pages {
+  grid-area: pages;
+  min-width: 0;
+}
+
+.page {
+  display: none;
+}
+
+.page.active {
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'top'
+      'nav'
+      'pages';
+  }
+
+  .nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 4px;
+    margin-bottom: 12px;
+    padding-bottom: 4px;
+  }
+
+  .nav a {
+    white-space: nowrap;
+  }
 }
 
 .card {
@@ -45,34 +119,78 @@ code {
   border-radius: 3px;
 }
 
-.scenes {
+.nowrap {
+  white-space: nowrap;
+}
+
+.check.inline {
+  margin-bottom: 0;
+  align-items: center;
+}
+
+.check.inline input {
+  margin-top: 0;
+}
+
+details > summary {
+  cursor: pointer;
+}
+
+/* ---------- 场景与接口配置卡片 ---------- */
+
+.scenes,
+.providers {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-bottom: 12px;
 }
 
-.scene {
+.scene,
+.provider {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
   background: #161616;
 }
 
-.scene.default {
+.scene.default,
+.provider.active {
   border-color: #2d5b86;
   background: #12202b;
 }
 
-.scene .head {
+.scene .head,
+.provider .head {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
 
-.scene .head input[type='text'] {
+.scene .head input[type='text'],
+.provider .head input[type='text'] {
   flex: 1;
+}
+
+.provider .field {
+  margin-bottom: 10px;
+}
+
+.provider details.advanced {
+  margin-top: 8px;
+}
+
+.provider details.advanced summary {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.provider .test-state {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .badge {
@@ -83,6 +201,56 @@ code {
   color: #d7ecff;
   white-space: nowrap;
 }
+
+/* ---------- 字幕外观 ---------- */
+
+.preview-player {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  aspect-ratio: 16 / 9;
+  background:
+    radial-gradient(circle at 70% 30%, rgba(62, 166, 255, 0.18), transparent 45%),
+    linear-gradient(160deg, #2b3a4a, #0e1116 60%, #1a1210);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.segment {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.segment button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 5px 12px;
+}
+
+.segment button + button {
+  border-left: 1px solid var(--line);
+}
+
+.segment button[aria-checked='true'] {
+  background: #2d5b86;
+  color: #d7ecff;
+}
+
+input[type='color'] {
+  width: 64px;
+  height: 30px;
+  padding: 2px;
+  background: #121212;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+/* ---------- 其他 ---------- */
 
 .preview {
   margin: 8px 0 0;
@@ -101,4 +269,44 @@ code {
 
 #saved.flash {
   color: var(--ok);
+}
+
+.cache-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.cache-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #161616;
+}
+
+.cache-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.cache-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* 窄屏：两列字段改单列（放在最后，覆盖上面的 .two） */
+@media (max-width: 720px) {
+  .two {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
