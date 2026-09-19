@@ -10,6 +10,22 @@ Videos and replays: read the video's own YouTube caption track, translate the wh
 
 **Development version 0.2.0 (unreleased).** A standalone Chrome Manifest V3 extension. The current interface is in Simplified Chinese. Install it manually for now; it is not listed in a browser extension store.
 
+## Screenshots
+
+These screenshots use the built-in offline preview with empty credentials and no cached subtitles.
+
+### Caption appearance
+
+![Caption appearance settings](docs/screenshots/settings-captions.jpg)
+
+### Text model configuration
+
+![Text model configuration](docs/screenshots/settings-models.jpg)
+
+### Whole-video subtitles
+
+![Whole-video subtitle settings](docs/screenshots/settings-video.jpg)
+
 ## What it does
 
 **Live streams (audio translation)**
