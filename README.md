@@ -47,9 +47,9 @@ For updates, replace the files in the same installation folder, reload the exten
 ## First-time setup
 
 1. Open the extension popup and select **设置** (Settings).
-2. Enter your own Gemini API key. You can create one in [Google AI Studio](https://aistudio.google.com/apikey). Your key must have access to the configured Live Translate model.
+2. Enter your own Gemini API key under **实时翻译**. You can create one in [Google AI Studio](https://aistudio.google.com/apikey). Your key must have access to the configured Live Translate model.
 3. Make sure your browser can reach `generativelanguage.googleapis.com`, or configure a compatible WSS proxy in Settings.
-4. For whole-video subtitles, open **整片字幕翻译** in Settings, pick the API type, and enter a model name. Gemini reuses the Live key unless you enter a separate one; OpenAI-compatible endpoints need their own base URL and key. The model name starts empty: enter a model your account can actually access.
+4. For whole-video subtitles, open **文字模型** in Settings and configure an endpoint: pick the API type and enter a model name. You can keep several configurations and mark the one whole-video subtitles use. Gemini reuses the Live key unless you enter a separate one; OpenAI-compatible endpoints need their own base URL and key. The model name starts empty: use **列出可用模型** to pick one your account can access. **测试连接** only queries model metadata and costs nothing (passing does not prove generation works); **生成测试** sends one tiny request through the real translation path and uses a small amount of quota.
 5. Choose a translation direction. The default is **Japanese → Chinese**.
 6. Open a YouTube live stream. Automatic start is enabled by default once a key is configured; you can turn it off in Settings.
 
@@ -66,8 +66,8 @@ Live streams use `gemini-3.5-live-translate-preview`. Availability and API usage
 | 场景 | Chooses a reusable scene prompt, such as VTuber, gaming, or general live streams. |
 | 本场补充 | Adds temporary background for this video. It is cleared when you change videos or reload the page. |
 | 应用当前设置并重新开始 | Restarts live translation with your updated language, scene, and background. |
-| Settings → caption appearance | Changes caption size, position, background, and line count immediately. |
-| Settings → 字幕缓存 | Lists cached videos and deletes one or all of them. |
+| Settings → 字幕外观 | Display mode (bilingual, translation only, original only), translation position, size, position, background, font, and colors apply immediately, with a live preview. |
+| Settings → 数据 | Lists cached videos and deletes one or all of them; exports and imports settings; resets to defaults. |
 
 Each session freezes its translation configuration. Reconnecting or rotating a connection keeps that snapshot; editing settings takes effect when you start a new session. Temporary notes are sent to the page as you type, so closing the popup does not discard the input.
 
@@ -95,7 +95,7 @@ Public store distribution, including its consent flow and privacy disclosures, w
 | It cannot connect to Gemini | Check your key, model access, network, and configured proxy. |
 | Connected, but no captions | Play spoken audio, unmute the player, and check the input-level bar in the popup. Silence alone does not mean the connection failed. |
 | "No caption track" for a video | The video has no captions, or auto captions are not generated yet. Setting 听什么 to auto-detect relaxes track selection. |
-| The caption endpoint returned empty content | YouTube's caption endpoint requires the player's own validation parameters. Turn CC on once in the player and retry; if it still fails, the endpoint may have changed. |
+| The caption endpoint returned no usable content | YouTube's caption endpoint requires the player's own validation parameters. The error names the paths that were tried; `await LT.debug.probeCaptions()` in the content-script console shows the full log. Turn CC on once in the player and retry; if it still fails, the endpoint may have changed. |
 | The text model returns 404 / 401 | Check the model name, whether the base URL ends at `/v1`, and whether the key can access that model. |
 | A third-party endpoint reports CORS or "not authorized" | Use **授权浏览器访问该域名** in Settings; requests are then relayed through the extension's background worker. |
 | Captions overlap YouTube CC | Turn off YouTube CC or adjust the caption bottom position in Settings. |

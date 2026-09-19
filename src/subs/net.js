@@ -5,17 +5,19 @@
  * - Service Worker 有 host_permissions 可以跨域，但空闲 30 秒、单请求 5 分钟会被杀，
  *   所以转发一律走流式响应，用端口把分块推回来，端口活动本身也让 SW 保持存活。
  * - 'auto'：先直连，遇到网络层错误（多半是 CORS）再转后台，并记住这次会话之后都走后台。
+ * - 方法默认 POST；设置页查模型信息用 GET，两条路径都按 method 发，GET 不带正文。
  */
 globalThis.LT = globalThis.LT || {};
 
 (() => {
   const LT = globalThis.LT;
   const relayOrigins = new Set(); // 本页内已确认直连失败的域名
+  const bodyFor = (method, body) => (method === 'GET' || method === 'HEAD' ? undefined : body);
 
-  async function direct({ url, headers, body, signal }) {
+  async function direct({ url, method, headers, body, signal }) {
     let res;
     try {
-      res = await fetch(url, { method: 'POST', headers, body, signal });
+      res = await fetch(url, { method, headers, body: bodyFor(method, body), signal });
     } catch (err) {
       // 只允许尚未收到响应的网络错误尝试另一条路径。
       if (err instanceof TypeError) err.canRelay = true;
@@ -42,7 +44,7 @@ globalThis.LT = globalThis.LT || {};
     return { status: res.status, ok: res.ok, text, retryAfter };
   }
 
-  function relay({ url, headers, body, signal }) {
+  function relay({ url, method, headers, body, signal }) {
     return new Promise((resolve, reject) => {
       let port;
       try {
@@ -91,7 +93,7 @@ globalThis.LT = globalThis.LT || {};
         signal.addEventListener('abort', onAbort, { once: true });
       }
       try {
-        port.postMessage({ type: 'fetch', url, headers, body });
+        port.postMessage({ type: 'fetch', method, url, headers, body: bodyFor(method, body) });
       } catch (err) {
         finish(reject, err);
       }
@@ -99,7 +101,7 @@ globalThis.LT = globalThis.LT || {};
   }
 
   /**
-   * @param {{url:string, headers:object, body:string, signal?:AbortSignal, path:'auto'|'direct'|'relay'}} req
+   * @param {{url:string, method:string, headers:object, body?:string, signal?:AbortSignal, path:'auto'|'direct'|'relay'}} req
    * @returns {Promise<{status:number, ok:boolean, text:string, retryAfter:string, via:string}>}
    */
   async function route(req) {
@@ -118,8 +120,12 @@ globalThis.LT = globalThis.LT || {};
     }
   }
 
-  /** 整个请求（包括读取流）最多等待两分钟；用户取消和超时分别处理。 */
-  async function post(req) {
+  /**
+   * 发一次请求。整个请求（包括读取流）默认最多等两分钟，可用 timeoutMs 缩短；用户取消和超时分别处理。
+   * @param {{url:string, method?:string, headers:object, body?:string, signal?:AbortSignal, path?:string, timeoutMs?:number}} req
+   */
+  async function request(req) {
+    const method = String(req.method || 'POST').toUpperCase();
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     const external = req.signal;
@@ -129,17 +135,21 @@ globalThis.LT = globalThis.LT || {};
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, LT.SUBS.REQUEST_TIMEOUT_MS);
+    }, req.timeoutMs || LT.SUBS.REQUEST_TIMEOUT_MS);
     try {
-      return await route({ ...req, signal: controller.signal });
+      return await route({ ...req, method, signal: controller.signal });
     } catch (err) {
-      if (timedOut) throw new Error('文字模型请求超时，请重试或降低并发请求数');
+      if (timedOut) {
+        throw new Error(method === 'GET' ? '请求超时，接口没有响应' : '文字模型请求超时，请重试或降低并发请求数');
+      }
       throw err;
     } finally {
       clearTimeout(timer);
       if (external) external.removeEventListener('abort', onAbort);
     }
   }
+
+  const post = (req) => request({ ...req, method: 'POST' });
 
   /** 把 SSE 文本拆成 JSON 事件数组；不是 SSE（普通 JSON 响应）时整体解析。 */
   function parseSse(text) {
@@ -175,5 +185,5 @@ globalThis.LT = globalThis.LT || {};
     return events;
   }
 
-  LT.Net = { post, parseSse, relayOrigins };
+  LT.Net = { request, post, parseSse, relayOrigins };
 })();

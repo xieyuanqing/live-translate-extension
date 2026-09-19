@@ -370,3 +370,21 @@ test('修改背景后自动加载缓存会标记旧配置，字幕仍显示原�
   assert.equal(again.ctrl.status().targetLang, 'zh');
   assert.equal(again.calls.length, 0);
 });
+
+test('读取字幕轨期间取消，会通知页面桥放弃读取', async () => {
+  const h = harness();
+  let cancelled = 0;
+  let release;
+  h.LT.YouTube.cancelCaptions = () => { cancelled++; };
+  h.LT.YouTube.fetchCaptions = () => new Promise(r => { release = r; });
+  const pending = h.start();
+  await flush();
+  assert.equal(h.ctrl.phase, 'reading');
+  h.ctrl.cancel();
+  assert.equal(cancelled, 1);
+  assert.equal(h.ctrl.phase, 'idle');
+  release({ error: '读取已取消', tried: [] });
+  await pending;
+  assert.equal(h.ctrl.phase, 'idle');
+  assert.equal(h.calls.length, 0);
+});

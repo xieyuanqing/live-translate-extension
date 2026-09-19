@@ -39,6 +39,7 @@ globalThis.LT = globalThis.LT || {};
       sourceLang: settings.sourceLang, targetLang: settings.targetLang,
       scene: LT.Settings.scene(settings), useMetadata: settings.useMetadata,
       metadataLimit: settings.metadataLimit, manualContext: settings.manualContext,
+      extraInstruction: settings.subsExtraInstruction || '',
       apiType: config.apiType, baseUrl: config.baseUrl, model: config.model,
     });
   };
@@ -52,6 +53,7 @@ globalThis.LT = globalThis.LT || {};
       this.generation = 0;
       this.controllers = new Set();
       this.visible = true;
+      this.reading = false; // 正在等页面桥读字幕轨
       this.reset('');
     }
 
@@ -185,10 +187,11 @@ globalThis.LT = globalThis.LT || {};
     updateSettings(settings) {
       const meta = this.meta;
       if (!meta || !['ready', 'partial', 'error'].includes(this.phase)) return;
+      const config = LT.TextModel.resolve(settings);
       this.staleConfig = meta.settingsHash
         ? meta.settingsHash !== settingsHash(settings)
         : meta.targetLang !== settings.targetLang || meta.sourceLang !== settings.sourceLang ||
-          meta.model !== settings.textModel || meta.apiType !== settings.textApiType;
+          meta.model !== config.model || meta.apiType !== config.apiType;
       this.emit();
     }
 
@@ -285,6 +288,8 @@ globalThis.LT = globalThis.LT || {};
     }
 
     abortAll() {
+      if (this.reading && LT.YouTube && typeof LT.YouTube.cancelCaptions === 'function') LT.YouTube.cancelCaptions();
+      this.reading = false;
       for (const c of this.controllers) {
         try {
           c.abort();
@@ -366,6 +371,7 @@ globalThis.LT = globalThis.LT || {};
           metadataText,
           manualContext: settings.manualContext,
           tempContext,
+          extraInstruction: settings.subsExtraInstruction,
         });
         const fp = LT.SubsCache.fingerprint({
           seg: LT.SUBS.SEG_VERSION,
@@ -505,7 +511,7 @@ globalThis.LT = globalThis.LT || {};
       const info = await LT.YouTube.captionTracks();
       if (!alive()) return null;
       if (!info || info.videoId !== videoId) throw new Error('播放器还没就绪，请稍后再试');
-      const track = LT.YouTube.chooseTrack(info.tracks, settings.sourceLang, info.defaultIndex);
+      const track = LT.YouTube.chooseTrack(info.tracks, settings.sourceLang, info.defaultIndex, info.selected);
       if (!track) {
         if (info.tracks.length === 0) throw new Error('这个视频没有可用的字幕轨（自动字幕可能还没生成）');
         const available = info.tracks
@@ -513,16 +519,25 @@ globalThis.LT = globalThis.LT || {};
           .join('、');
         throw new Error(`没有${LT.sourceLabel(settings.sourceLang)}字幕轨；可用：${available}。可把「听什么」改成自动检测`);
       }
-      const res = await LT.YouTube.fetchCaptions({
-        videoId,
-        languageCode: track.languageCode,
-        kind: track.kind,
-        vssId: track.vssId,
-        baseUrl: track.baseUrl,
-      });
+      const t0 = Date.now();
+      this.reading = true; // 取消时要通知页面桥放弃读取
+      let res;
+      try {
+        res = await LT.YouTube.fetchCaptions({
+          videoId,
+          languageCode: track.languageCode,
+          kind: track.kind,
+          vssId: track.vssId,
+          baseUrl: track.baseUrl,
+        });
+      } finally {
+        this.reading = false;
+      }
       if (!alive()) return null;
       if (!res) throw new Error('读取字幕超时，请刷新页面后再试');
+      if (Array.isArray(res.tried) && res.tried.some((t) => t.error)) console.info('[流译] 字幕读取路径', res.tried);
       if (res.error || !res.text) throw new Error(`读取字幕失败：${res.error || '空响应'}`);
+      const format = typeof LT.Json3.detectFormat === 'function' ? LT.Json3.detectFormat(res.text) : '';
       const events = LT.Json3.parse(res.text);
       const isAsr = track.kind === 'asr';
       const units = LT.Segmenter.build(events, { isAsr, lang: track.languageCode });
@@ -540,7 +555,9 @@ globalThis.LT = globalThis.LT || {};
         if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
       });
       if (!alive()) return null;
-      console.info(`[流译] 字幕轨 ${trackLabel}：${events.length} 段 → ${units.length} 条（来源 ${res.source}）`);
+      console.info(
+        `[流译] 字幕轨 ${trackLabel}：${events.length} 段 → ${units.length} 条（来源 ${res.source}，格式 ${format || '未知'}，${Date.now() - t0} 毫秒）`
+      );
       return { units, trackKey, trackLabel, isAsr };
     }
 
@@ -765,10 +782,10 @@ globalThis.LT = globalThis.LT || {};
       }
       const idx = LT.SubsScheduler.indexAt(this.units, video.currentTime * 1000);
       const text = idx >= 0 ? this.texts[idx] : undefined;
-      const key = text != null ? idx : -1;
-      if (key !== this.lastIdx || text !== this.lastText) {
-        this.caption.showTimed(text || '', text ? this.units[idx].text : '');
-        this.lastIdx = key;
+      if (idx !== this.lastIdx || text !== this.lastText) {
+        // 原文总是一起给：双语 / 仅原文模式下还没翻到的条目先显示原文，仅译文模式由字幕层忽略
+        this.caption.showTimed(text || '', idx >= 0 ? this.units[idx].text : '');
+        this.lastIdx = idx;
         this.lastText = text;
       }
       if (this.phase === 'translating') this.progressNote();

@@ -25,6 +25,21 @@ globalThis.LT = globalThis.LT || {};
   });
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const base = (code) => String(code || '').toLowerCase().split('-')[0];
+
+  /** 把播放器当前选中的轨道对到列表里的一条：先按 vssId，再按语言加类型，最后只按语言。 */
+  function matchSelected(tracks, selected) {
+    if (!selected || !selected.languageCode) return null;
+    if (selected.vssId) {
+      const hit = tracks.find((t) => t.vssId && t.vssId === selected.vssId);
+      if (hit) return hit;
+    }
+    return (
+      tracks.find((t) => t.languageCode === selected.languageCode && (t.kind || '') === (selected.kind || '')) ||
+      tracks.find((t) => t.languageCode === selected.languageCode) ||
+      null
+    );
+  }
 
   LT.YouTube = {
     player() {
@@ -75,33 +90,45 @@ globalThis.LT = globalThis.LT || {};
       return this.request(LT.BRIDGE.KIND_META, undefined, timeoutMs);
     },
 
-    /** 当前视频的字幕轨列表：{ videoId, defaultIndex, tracks[] }。 */
+    /** 当前视频的字幕轨列表：{ videoId, defaultIndex, selected, hasPot, tracks[] }。 */
     captionTracks() {
       return this.request(LT.BRIDGE.KIND_TRACKS, undefined, 3000);
     },
 
-    /** 读一条字幕轨的 json3 文本。页面桥可能要触发播放器加载并等待，超时给长一点。 */
+    /**
+     * 读一条字幕轨的 json3 文本：{ text, source, tried } 或 { error, tried }。
+     * 页面桥自己有 20 秒的截止时间，这里再留一点余量；超时返回 null。
+     */
     fetchCaptions(track) {
       return this.request(LT.BRIDGE.KIND_CAPTIONS, track, 25000);
     },
 
+    /** 让页面桥放弃正在进行的读取并恢复 CC（取消、换视频时调用），不等回复。 */
+    cancelCaptions() {
+      window.postMessage({ __lt: TAG, dir: 'req', id: reqSeq++, kind: LT.BRIDGE.KIND_CANCEL }, '*');
+    },
+
     /**
-     * 选字幕轨：指定源语言时先人工轨再自动轨；自动检测时用播放器默认轨，
-     * 其次第一条人工轨、第一条自动轨。自动翻译出来的轨不在列表里，不会被选到。
+     * 选字幕轨。
+     * - 指定源语言：同语言里先人工轨再自动轨；播放器里当前选中的轨道如果也是这个语言，优先用它。
+     * - 自动检测：播放器当前选中的轨 > 播放器默认轨 > 第一条人工轨 > 第一条自动轨。
+     * 自动翻译出来的轨不在列表里，不会被选到；selected 若是自动翻译轨，只按它的原语言匹配。
      */
-    chooseTrack(tracks, sourceLang, defaultIndex = -1) {
+    chooseTrack(tracks, sourceLang, defaultIndex = -1, selected = null) {
       if (!Array.isArray(tracks) || tracks.length === 0) return null;
-      const base = (code) => String(code || '').toLowerCase().split('-')[0];
       const human = tracks.filter((t) => t.kind !== 'asr');
       const asr = tracks.filter((t) => t.kind === 'asr');
+      const picked = matchSelected(tracks, selected);
       if (sourceLang && sourceLang !== 'auto') {
         const want = base(sourceLang);
+        if (picked && base(picked.languageCode) === want) return picked;
         return (
           human.find((t) => base(t.languageCode) === want) ||
           asr.find((t) => base(t.languageCode) === want) ||
           null
         );
       }
+      if (picked) return picked;
       if (defaultIndex >= 0 && tracks[defaultIndex]) return tracks[defaultIndex];
       return human[0] || asr[0] || null;
     },

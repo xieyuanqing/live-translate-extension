@@ -227,6 +227,18 @@ console.log('\n[3] 提示词组合');
     tempContext: '只有临时补充',
   });
   check('只有临时补充也有围栏', tempOnly.includes('<session_context>') && tempOnly.includes('只有临时补充'));
+
+  const subsExtra = LT.Prompt.buildSubs({
+    scene, sourceLang: 'ja', targetLang: 'zh', isAsr: true, metadataText: '', manualContext: '', extraInstruction: ' 术语按简中服 ',
+  });
+  check(
+    '整片字幕附加指令在场景之后、输出格式之前',
+    subsExtra.includes('【整片字幕附加指令】\n术语按简中服') &&
+      subsExtra.indexOf('术语按简中服') > subsExtra.indexOf(scene.instruction) &&
+      subsExtra.indexOf('术语按简中服') < subsExtra.indexOf('【输出格式】')
+  );
+  const subsPlain = LT.Prompt.buildSubs({ scene, sourceLang: 'ja', targetLang: 'zh', isAsr: true, metadataText: '', manualContext: '', extraInstruction: '  ' });
+  check('附加指令为空时不出现小节', !subsPlain.includes('【整片字幕附加指令】'));
 }
 
 // ---------- 4. 设置归一化 ----------
@@ -238,6 +250,17 @@ console.log('\n[4] 设置归一化');
   check('无效场景回落到第一个', s.sceneId === s.scenes[0].id, s.sceneId);
   const keys = LT.Settings.keyList({ apiKeys: ' a , ,b ' });
   check('多 key 解析', keys.join('|') === 'a|b', keys.join('|'));
+  const look = LT.Settings.normalize({
+    captionDisplayMode: 'nope', captionTranslationPosition: 'left', captionFont: 'comic', captionWeight: 640,
+    captionColor: 'red', captionSourceColor: '#ABCDEF', captionSourceScale: 5, showSource: true,
+  });
+  check(
+    '字幕外观字段归一化',
+    look.captionDisplayMode === 'translationOnly' && look.captionTranslationPosition === 'above' && look.captionFont === 'player' &&
+      look.captionWeight === 600 && look.captionColor === '#ffffff' && look.captionSourceColor === '#abcdef' &&
+      look.captionSourceScale === 1 && !('showSource' in look),
+    JSON.stringify(look)
+  );
 }
 
 // ---------- 5. manifest 引用完整性 ----------
@@ -268,6 +291,13 @@ console.log('\n[5] manifest 引用');
     ) && order('src/content/video-subs.js') < order('src/content/main.js')
   );
   check('unlimitedStorage 权限', manifest.permissions.includes('unlimitedStorage'));
+  // 设置页与弹窗的 <script src> 不在 manifest 里，也要都存在
+  for (const page of ['src/ui/options.html', 'src/ui/popup.html']) {
+    const html = fs.readFileSync(path.join(ROOT, page), 'utf8');
+    for (const m of html.matchAll(/<script src="([^"]+)"/g)) {
+      check(`${page} 引用 ${m[1]}`, fs.existsSync(path.join(ROOT, path.dirname(page), m[1])));
+    }
+  }
 }
 
 // ---------- 6. json3 解析与分句 ----------
@@ -339,6 +369,29 @@ console.log('\n[6] json3 解析与分句');
   check(
     'json3 识别',
     LT.Json3.looksLikeJson3('{"wireMagic":"pb3","events":[]}') && !LT.Json3.looksLikeJson3('<?xml version="1.0"?><timedtext/>')
+  );
+
+  // 格式识别只进日志，不改解析结果
+  check(
+    'json3 变体识别',
+    LT.Json3.detectFormat(asr) === 'scrolling-asr' &&
+      LT.Json3.detectFormat(JSON.stringify(manual)) === 'standard' &&
+      LT.Json3.detectFormat('not json') === 'unknown' &&
+      LT.Json3.detectFormat({ events: [] }) === 'empty'
+  );
+  const karaoke = { events: [] };
+  for (let i = 0; i < 20; i++) {
+    karaoke.events.push({ tStartMs: i * 1000, dDurationMs: 900, wpWinPosId: 3, segs: [{ utf8: `歌词${i}` }] });
+    karaoke.events.push({ tStartMs: i * 1000, dDurationMs: 900, wpWinPosId: 1, segs: [{ utf8: `かし${i}` }] });
+  }
+  const animated = { events: [] };
+  for (let i = 0; i < 60; i++) animated.events.push({ tStartMs: i * 50, dDurationMs: 40, wpWinPosId: 1, segs: [{ utf8: 'x' }] });
+  const stray = { events: karaoke.events.slice(0, 3).concat(manual.events) }; // 偶发的同时多位置不算卡拉 OK
+  check(
+    '卡拉 OK 与特效字幕识别',
+    LT.Json3.detectFormat(karaoke) === 'karaoke' &&
+      LT.Json3.detectFormat(animated) === 'animated' &&
+      LT.Json3.detectFormat(stray) === 'standard'
   );
 }
 
@@ -441,15 +494,52 @@ console.log('\n[9] 缓存指纹、字幕提示词与设置');
     '人工字幕模式与自动检测',
     manualSys.includes('人工字幕轨') && manualSys.includes('自动识别字幕原文语言') && !manualSys.includes('<session_context>')
   );
-  const s = LT.Settings.normalize({ textApiType: 'weird', textConcurrency: 99, textRequestPath: 'x', textBaseUrl: 'https://a.b/v1///' });
+  const s = LT.Settings.normalize({
+    providers: [
+      { id: 'a', apiType: 'weird', concurrency: 99, requestPath: 'x', baseUrl: 'https://a.b/v1///' },
+      { id: 'a', apiType: 'openai' },
+      null,
+    ],
+    subsProviderId: 'nope',
+    textApiKey: 'old',
+  });
   check(
-    '文字模型设置归一化',
-    s.textApiType === 'gemini' && s.textConcurrency === 6 && s.textRequestPath === 'auto' && s.textBaseUrl === 'https://a.b/v1'
+    '文字模型接口配置归一化：范围收敛、去重、选用回落、旧字段清掉',
+    s.providers.length === 1 && s.providers[0].apiType === 'gemini' && s.providers[0].concurrency === 6 &&
+      s.providers[0].requestPath === 'auto' && s.providers[0].baseUrl === 'https://a.b/v1' &&
+      s.subsProviderId === 'a' && !('textApiKey' in s),
+    JSON.stringify(s.providers)
   );
-  const resolved = LT.TextModel.resolve({ ...LT.DEFAULTS, apiKeys: 'live-key', textApiKey: '', textModel: 'm' });
-  check('Gemini 没填 Key 时复用 Live Key', resolved.key === 'live-key' && resolved.keySource === 'live' && resolved.baseUrl === LT.TEXT_DEFAULT_BASE.gemini);
-  const own = LT.TextModel.resolve({ ...LT.DEFAULTS, apiKeys: 'live-key', textApiType: 'openai', textApiKey: 'sk', textBaseUrl: 'https://x.y/v1/' });
-  check('OpenAI 用自己的 Key 与地址', own.key === 'sk' && own.baseUrl === 'https://x.y/v1');
+  const empty = LT.Settings.normalize({ providers: [] });
+  check(
+    '没有接口配置时补一套默认 Gemini',
+    empty.providers.length === 1 && empty.providers[0].apiType === 'gemini' && empty.subsProviderId === empty.providers[0].id
+  );
+  const fresh = LT.Settings.newProvider({ apiType: 'openai', id: 'ignored' });
+  check('新建配置带新 id', fresh.id !== 'ignored' && fresh.apiType === 'openai' && fresh.concurrency === 3);
+  const resolved = LT.TextModel.resolve({
+    ...LT.DEFAULTS, apiKeys: 'live-key', providers: [{ id: 'g', apiType: 'gemini', model: 'models/m' }], subsProviderId: 'g',
+  });
+  check(
+    'Gemini 没填 Key 时复用 Live Key，模型名去掉 models/ 前缀',
+    resolved.key === 'live-key' && resolved.keySource === 'live' && resolved.baseUrl === LT.TEXT_DEFAULT_BASE.gemini && resolved.model === 'm'
+  );
+  const multi = {
+    ...LT.DEFAULTS, apiKeys: 'live-key', subsProviderId: 'g',
+    providers: [{ id: 'g', apiType: 'gemini' }, { id: 'o', apiType: 'openai', apiKey: 'sk', baseUrl: 'https://x.y/v1/', concurrency: 2 }],
+  };
+  const own = LT.TextModel.resolve(multi, 'o');
+  check(
+    '按 id 取指定的一套：OpenAI 用自己的 Key 与地址',
+    own.key === 'sk' && own.baseUrl === 'https://x.y/v1' && own.concurrency === 2 && LT.TextModel.resolve(multi).apiType === 'gemini'
+  );
+  const geminiList = '{"models":[{"name":"models/a","supportedGenerationMethods":["generateContent"]},{"name":"models/e","supportedGenerationMethods":["embedContent"]}]}';
+  check(
+    '模型列表解析',
+    JSON.stringify(LT.TextModel.modelIds('gemini', geminiList)) === '["a"]' &&
+      JSON.stringify(LT.TextModel.modelIds('openai', '{"data":[{"id":"x"},{"id":"y"}]}')) === '["x","y"]' &&
+      LT.TextModel.modelIds('openai', 'nope').length === 0
+  );
 }
 
 // ---------- 10. 文字模型请求与流式解析 ----------

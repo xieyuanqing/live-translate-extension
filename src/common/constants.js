@@ -118,22 +118,52 @@ globalThis.LT = globalThis.LT || {};
     stabIdleMs: 2500,
     stabMaxChars: 42,
 
-    captionLines: 2, // 保留几行已确认字幕
+    captionLines: 2, // 保留几行已确认字幕（只影响实时翻译）
     captionScale: 1.0,
     captionBottom: 11, // 距播放器底部百分比
     captionOpacity: 60, // 背景不透明度 %
-    showSource: false, // 同时显示原文
+    // 显示模式只决定显示哪些行，不会停止正在进行的翻译；仅原文也要先有任务或缓存
+    captionDisplayMode: 'translationOnly', // bilingual | translationOnly | originalOnly
+    captionTranslationPosition: 'above', // 双语时译文在原文的上方还是下方：above | below
+    captionFont: 'player', // 见 LT.CAPTION_FONTS
+    captionWeight: 400, // 300 - 700
+    captionColor: '#ffffff', // 译文颜色
+    captionSourceColor: '#cfd8dc', // 原文颜色
+    captionSourceScale: 0.78, // 原文字号相对译文的比例
     pauseOnAd: true,
 
-    // ---- 整片字幕（视频 / 回放）用的文字模型 ----
-    textApiType: 'gemini', // gemini | openai
-    textBaseUrl: '', // 留空用官方地址
-    textApiKey: '', // Gemini 留空则复用上面的 Live Key
-    textModel: '', // 使用用户账号实际可用的模型名，不预填未经验证的名称
-    textConcurrency: 3, // 同时进行的翻译请求数
-    textRequestPath: 'auto', // auto | direct | relay：页面直连还是经后台转发
+    // ---- 整片字幕（视频 / 回放）用的文字模型：可保存多套接口配置，按 subsProviderId 选用 ----
+    // 每套：{ id, name, apiType: gemini | openai, baseUrl（空用官方地址）, apiKey（Gemini 空则复用 Live Key）,
+    //        model（用账号实际可用的名字，不预填）, concurrency（并发请求数）, requestPath: auto | direct | relay }
+    providers: [
+      { id: 'p-default', name: '', apiType: 'gemini', baseUrl: '', apiKey: '', model: '', concurrency: 3, requestPath: 'auto' },
+    ],
+    subsProviderId: 'p-default',
     autoShowCached: true, // 打开已翻译过的视频时自动显示缓存字幕
+    subsExtraInstruction: '', // 只对整片字幕有意义的附加指令（错听规律、术语表），进系统提示词和缓存指纹
   };
+
+  // ---------- 字幕外观 ----------
+  LT.CAPTION_DISPLAY_MODES = [
+    { code: 'bilingual', label: '双语' },
+    { code: 'translationOnly', label: '仅译文' },
+    { code: 'originalOnly', label: '仅原文' },
+  ];
+  // 只写 font-family 栈，不下载字体；机器上没有的字体自动落到后面的候选
+  LT.CAPTION_FONTS = [
+    { code: 'player', label: '跟随播放器', family: "Roboto, 'YouTube Noto', 'Microsoft YaHei', system-ui, sans-serif" },
+    {
+      code: 'sans',
+      label: '黑体（思源 / Noto Sans）',
+      family: "'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans JP', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+    },
+    {
+      code: 'serif',
+      label: '宋体（思源 / Noto Serif）',
+      family: "'Noto Serif CJK SC', 'Noto Serif SC', 'Source Han Serif SC', 'Noto Serif JP', 'Songti SC', SimSun, serif",
+    },
+    { code: 'system', label: '系统默认', family: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif" },
+  ];
 
   // ---------- 整片字幕：文字模型与分块参数 ----------
   LT.TEXT_API_TYPES = [
@@ -144,6 +174,11 @@ globalThis.LT = globalThis.LT || {};
     gemini: 'https://generativelanguage.googleapis.com',
     openai: 'https://api.openai.com/v1',
   };
+  LT.TEXT_REQUEST_PATHS = [
+    { code: 'auto', label: '自动（先直连，失败改后台转发）' },
+    { code: 'direct', label: '只页面直连' },
+    { code: 'relay', label: '只经扩展后台转发' },
+  ];
   LT.SUBS = {
     SEG_VERSION: 1, // 分句规则版本，进缓存指纹；改 segmenter 规则要升号
     CHUNK_UNITS: 60, // 每块最多条数
@@ -181,5 +216,6 @@ globalThis.LT = globalThis.LT || {};
     KIND_META: 'meta',
     KIND_TRACKS: 'tracks',
     KIND_CAPTIONS: 'captions',
+    KIND_CANCEL: 'cancel', // 放弃进行中的字幕读取并恢复 CC
   };
 })();

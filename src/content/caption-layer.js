@@ -2,6 +2,10 @@
  * 字幕层：注入 #movie_player 内部。
  * 因为是播放器的子元素，全屏 / 剧场 / 迷你播放器都会自动跟随，不需要单独适配。
  * （画中画例外：PiP 里显示不了 DOM，这是浏览器限制。）
+ *
+ * 外观全部通过 CSS 变量下发（字号、颜色、字体、字重、原文比例），设置页的预览用同一个类
+ * 挂到一个假播放器容器上，所以预览和真实播放器走的是同一条渲染路径。
+ * 显示模式（双语 / 仅译文 / 仅原文）只在 render 里过滤，不影响上游是否翻译。
  */
 globalThis.LT = globalThis.LT || {};
 
@@ -67,8 +71,15 @@ globalThis.LT = globalThis.LT || {};
     applySettings(settings) {
       this.settings = settings;
       if (!this.root) return;
-      this.root.style.setProperty('--lt-bottom', `${settings.captionBottom}%`);
-      this.root.style.setProperty('--lt-bg-opacity', String(settings.captionOpacity / 100));
+      const style = this.root.style;
+      style.setProperty('--lt-bottom', `${settings.captionBottom}%`);
+      style.setProperty('--lt-bg-opacity', String(settings.captionOpacity / 100));
+      const font = (LT.CAPTION_FONTS || []).find((f) => f.code === settings.captionFont) || (LT.CAPTION_FONTS || [])[0];
+      if (font) style.setProperty('--lt-font-family', font.family);
+      if (settings.captionWeight) style.setProperty('--lt-weight', String(settings.captionWeight));
+      if (settings.captionColor) style.setProperty('--lt-color', settings.captionColor);
+      if (settings.captionSourceColor) style.setProperty('--lt-source-color', settings.captionSourceColor);
+      if (settings.captionSourceScale) style.setProperty('--lt-source-scale', `${settings.captionSourceScale}em`);
       this.#scaleFont();
       this.#trimLines();
       this.render();
@@ -131,27 +142,36 @@ globalThis.LT = globalThis.LT || {};
 
     render() {
       if (!this.root) return;
+      const mode = this.settings.captionDisplayMode || 'translationOnly';
+      const translation = [];
+      if (mode !== 'originalOnly') {
+        const total = this.lines.length;
+        this.lines.forEach((text, i) => {
+          const el = document.createElement('div');
+          // 最后一行最亮，往上逐渐变淡，视线自然落在最新一句
+          el.className = i === total - 1 ? 'lt-line' : 'lt-line lt-line--dim';
+          el.textContent = text;
+          translation.push(el);
+        });
+        if (this.current) {
+          const el = document.createElement('div');
+          el.className = 'lt-line lt-line--current';
+          el.textContent = this.current;
+          translation.push(el);
+        }
+      }
+      let source = null;
+      if (mode !== 'translationOnly' && this.source) {
+        source = document.createElement('div');
+        source.className = 'lt-line lt-line--source';
+        source.textContent = this.source;
+      }
+      // 译文在上：先译文再原文；译文在下：先原文再译文
       const frag = document.createDocumentFragment();
-      const total = this.lines.length;
-      this.lines.forEach((text, i) => {
-        const el = document.createElement('div');
-        // 最后一行最亮，往上逐渐变淡，视线自然落在最新一句
-        el.className = i === total - 1 ? 'lt-line' : 'lt-line lt-line--dim';
-        el.textContent = text;
-        frag.appendChild(el);
-      });
-      if (this.current) {
-        const el = document.createElement('div');
-        el.className = 'lt-line lt-line--current';
-        el.textContent = this.current;
-        frag.appendChild(el);
-      }
-      if (this.settings.showSource && this.source) {
-        const el = document.createElement('div');
-        el.className = 'lt-line lt-line--source';
-        el.textContent = this.source;
-        frag.appendChild(el);
-      }
+      const above = this.settings.captionTranslationPosition !== 'below';
+      if (source && !above) frag.appendChild(source);
+      for (const el of translation) frag.appendChild(el);
+      if (source && above) frag.appendChild(source);
       this.root.replaceChildren(frag);
     }
 

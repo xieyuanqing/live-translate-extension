@@ -214,7 +214,8 @@ globalThis.LT = globalThis.LT || {};
         listener: {
           onState: (state) => { if (isCurrent()) onConnState(state); },
           onInputText: (t) => {
-            if (!isCurrent() || !settings.showSource) return;
+            // 仅译文模式不记原文；双语和仅原文都要，显示由字幕层按模式过滤
+            if (!isCurrent() || settings.captionDisplayMode === 'translationOnly') return;
             caption.setSource(t);
             caption.render();
           },
@@ -485,6 +486,48 @@ globalThis.LT = globalThis.LT || {};
     await handleVideoChanged();
   })();
 
-  // 方便在控制台手动调试：LT.debug.start() / LT.debug.stop() / LT.debug.videoSubs
-  LT.debug = { start, stop, session, status: statusSnapshot, videoSubs, startVideoSubs };
+  /**
+   * 诊断：只走读轨与解析，不调用模型、不写缓存、不改任务状态。
+   * 真机验证第一步在内容脚本的控制台跑 await LT.debug.probeCaptions()，把返回对象整个复制下来。
+   */
+  async function probeCaptions() {
+    const t0 = Date.now();
+    const clock = LT.fmtClock || ((ms) => String(ms));
+    const out = { videoId: LT.YouTube.videoIdFromUrl(), sourceLang: settings.sourceLang };
+    const info = await LT.YouTube.captionTracks();
+    if (!info) return { ...out, error: '播放器没就绪或页面桥没响应' };
+    Object.assign(out, {
+      tracks: info.tracks.map((t) => ({ languageCode: t.languageCode, kind: t.kind, vssId: t.vssId, name: t.name })),
+      defaultIndex: info.defaultIndex,
+      selected: info.selected,
+      hasPot: info.hasPot,
+    });
+    const track = LT.YouTube.chooseTrack(info.tracks, settings.sourceLang, info.defaultIndex, info.selected);
+    if (!track) return { ...out, error: info.tracks.length ? '没有匹配「听什么」的字幕轨' : '这个视频没有字幕轨' };
+    out.chosen = { languageCode: track.languageCode, kind: track.kind, vssId: track.vssId, name: track.name };
+    const res = await LT.YouTube.fetchCaptions({
+      videoId: info.videoId,
+      languageCode: track.languageCode,
+      kind: track.kind,
+      vssId: track.vssId,
+      baseUrl: track.baseUrl,
+    });
+    out.ms = Date.now() - t0;
+    if (!res) return { ...out, error: '页面桥 25 秒内没有回复' };
+    Object.assign(out, { source: res.source, error: res.error, tried: res.tried });
+    if (res.text) {
+      const isAsr = track.kind === 'asr';
+      out.format = LT.Json3.detectFormat(res.text);
+      out.bytes = res.text.length;
+      const events = LT.Json3.parse(res.text);
+      const units = LT.Segmenter.build(events, { isAsr, lang: track.languageCode });
+      out.eventCount = events.length;
+      out.unitCount = units.length;
+      out.sampleUnits = units.slice(0, 8).map((u) => `${clock(u.start)}–${clock(u.end)} ${u.text}`);
+    }
+    return out;
+  }
+
+  // 方便在控制台手动调试：LT.debug.start() / LT.debug.stop() / LT.debug.videoSubs / LT.debug.probeCaptions()
+  LT.debug = { start, stop, session, status: statusSnapshot, videoSubs, startVideoSubs, probeCaptions };
 })();

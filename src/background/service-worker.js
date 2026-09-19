@@ -82,10 +82,12 @@ chrome.runtime.onConnect.addListener((port) => {
         send({ type: 'error', message: `浏览器未授权访问 ${origin}，请在扩展设置里点「授权访问该域名」` });
         return;
       }
+      // 方法跟着请求走：翻译是 POST，设置页查模型信息是 GET（不能带正文）
+      const method = typeof msg.method === 'string' && msg.method ? msg.method.toUpperCase() : 'POST';
       const res = await fetch(msg.url, {
-        method: 'POST',
+        method,
         headers: msg.headers || {},
-        body: msg.body,
+        body: method === 'GET' || method === 'HEAD' ? undefined : msg.body,
         signal: controller.signal,
       });
       send({ type: 'head', status: res.status, ok: res.ok, retryAfter: res.headers.get('retry-after') || '' });

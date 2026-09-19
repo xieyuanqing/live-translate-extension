@@ -1,11 +1,13 @@
 /**
  * 文字翻译模型客户端：Gemini generateContent 与 OpenAI 兼容 chat/completions。
  * 只负责一次请求：拼请求、发出去、把流式响应合成完整文本和结束原因。重试与分块在 video-subs.js。
+ * 另外提供设置页用的三件事：查模型信息（不花额度）、列出可用模型、按翻译的完整路径做一次生成测试。
  */
 globalThis.LT = globalThis.LT || {};
 
 (() => {
   const LT = globalThis.LT;
+  const PROBE_TIMEOUT_MS = 15000;
 
   class RequestError extends Error {
     constructor(message, { status = 0, retryAfterMs = 0, fatal = false } = {}) {
@@ -17,24 +19,32 @@ globalThis.LT = globalThis.LT || {};
     }
   }
 
-  /** 从设置里整理出本次任务用的模型配置；Gemini 没单独填 Key 时复用 Live 的 Key。 */
-  function resolve(settings) {
-    const apiType = settings.textApiType === 'openai' ? 'openai' : 'gemini';
-    const baseUrl = String(settings.textBaseUrl || LT.TEXT_DEFAULT_BASE[apiType]).replace(/\/+$/, '');
-    let key = String(settings.textApiKey || '').trim();
-    let keySource = 'text';
+  /**
+   * 从设置里整理出本次任务用的模型配置；传 providerId 可取指定的一套。
+   * Gemini 没单独填 Key 时复用 Live 的 Key；模型名允许带 models/ 前缀，这里去掉。
+   */
+  function resolve(settings, providerId) {
+    const p = LT.Settings.provider(settings, providerId);
+    const apiType = p.apiType === 'openai' ? 'openai' : 'gemini';
+    const baseUrl = String(p.baseUrl || LT.TEXT_DEFAULT_BASE[apiType]).replace(/\/+$/, '');
+    let key = String(p.apiKey || '').trim();
+    let keySource = 'provider';
     if (!key && apiType === 'gemini') {
       key = LT.Settings.pickKey(settings);
       keySource = 'live';
     }
+    let model = String(p.model || '').trim();
+    if (apiType === 'gemini') model = model.replace(/^models\//, '');
     return {
+      id: p.id,
+      name: p.name || (LT.TEXT_API_TYPES.find((t) => t.code === apiType) || {}).label || apiType,
       apiType,
       baseUrl,
       key,
       keySource,
-      model: String(settings.textModel || '').trim(),
-      concurrency: settings.textConcurrency,
-      path: settings.textRequestPath || 'auto',
+      model,
+      concurrency: p.concurrency,
+      path: p.requestPath || 'auto',
     };
   }
 
@@ -113,18 +123,22 @@ globalThis.LT = globalThis.LT || {};
     return detail ? `${hint}：${detail}` : hint;
   }
 
-  /**
-   * @param {{config:object, system:string, user:string, signal?:AbortSignal}} args
-   * @returns {Promise<{text:string, finishReason:string, via:string}>}
-   */
-  async function translate({ config, system, user, signal }) {
+  function checkConfig(config) {
     if (!config.key) throw new RequestError('未配置 API Key，请在扩展设置里填写', { fatal: true });
-    if (!config.model) throw new RequestError('未填写文字模型名，请在扩展设置里填写', { fatal: true });
     try {
       new URL(config.baseUrl); // eslint-disable-line no-new
     } catch (_) {
       throw new RequestError(`接口地址无效：${config.baseUrl}`, { fatal: true });
     }
+  }
+
+  /**
+   * @param {{config:object, system:string, user:string, signal?:AbortSignal}} args
+   * @returns {Promise<{text:string, finishReason:string, via:string}>}
+   */
+  async function translate({ config, system, user, signal }) {
+    checkConfig(config);
+    if (!config.model) throw new RequestError('未填写文字模型名，请在扩展设置里填写', { fatal: true });
     const req = buildRequest(config, system, user);
     const res = await LT.Net.post({ ...req, signal, path: config.path });
     if (!res.ok) {
@@ -137,5 +151,102 @@ globalThis.LT = globalThis.LT || {};
     return { text: out.text, finishReason: out.finishReason, via: res.via };
   }
 
-  LT.TextModel = { RequestError, resolve, buildRequest, collect, translate };
+  // ---------- 设置页用：查模型、列模型、生成测试 ----------
+
+  /** 从模型列表响应里取模型名；Gemini 只留支持 generateContent 的，并去掉 models/ 前缀。 */
+  function modelIds(apiType, text) {
+    let o;
+    try {
+      o = JSON.parse(text);
+    } catch (_) {
+      return [];
+    }
+    if (apiType === 'openai') {
+      return (Array.isArray(o && o.data) ? o.data : [])
+        .map((m) => m && m.id)
+        .filter((id) => typeof id === 'string' && id);
+    }
+    return (Array.isArray(o && o.models) ? o.models : [])
+      .filter((m) => m && (!Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes('generateContent')))
+      .map((m) => String(m.name || '').replace(/^models\//, ''))
+      .filter(Boolean);
+  }
+
+  function listRequest(config) {
+    return config.apiType === 'openai'
+      ? { url: `${config.baseUrl}/models`, headers: { authorization: `Bearer ${config.key}` } }
+      : { url: `${config.baseUrl}/v1beta/models?pageSize=200`, headers: { 'x-goog-api-key': config.key } };
+  }
+
+  /** 列出账号实际可用的模型名。 */
+  async function listModels(config, signal) {
+    checkConfig(config);
+    const res = await LT.Net.request({ method: 'GET', ...listRequest(config), signal, path: config.path, timeoutMs: PROBE_TIMEOUT_MS });
+    if (!res.ok) throw new RequestError(errorMessage(res.status, res.text), { status: res.status });
+    return modelIds(config.apiType, res.text);
+  }
+
+  /**
+   * 第一级测试：只查模型信息或模型列表，不消耗生成额度。
+   * 通过只说明 Key 能访问查询接口、模型名存在；不证明生成请求、额度和流式响应可用。
+   * @returns {Promise<{ok:boolean, message:string, ms:number, via?:string, models?:string[], listed?:boolean}>}
+   */
+  async function probe(config, signal) {
+    const t0 = Date.now();
+    checkConfig(config);
+    const ms = () => Date.now() - t0;
+    if (config.apiType === 'gemini' && config.model) {
+      const res = await LT.Net.request({
+        method: 'GET',
+        url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}`,
+        headers: { 'x-goog-api-key': config.key },
+        signal,
+        path: config.path,
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+      if (!res.ok) return { ok: false, ms: ms(), via: res.via, message: errorMessage(res.status, res.text) };
+      let name = '';
+      try {
+        const o = JSON.parse(res.text);
+        name = o.displayName || '';
+      } catch (_) {
+        /* 不是 JSON 也算通过，状态码已经是 200 */
+      }
+      return { ok: true, ms: ms(), via: res.via, message: `连接及模型查询通过${name ? `：${name}` : ''}` };
+    }
+    const res = await LT.Net.request({ method: 'GET', ...listRequest(config), signal, path: config.path, timeoutMs: PROBE_TIMEOUT_MS });
+    if (res.status === 404 || res.status === 405 || res.status === 501) {
+      return { ok: false, ms: ms(), via: res.via, message: '接口不提供模型列表，请用「生成测试」验证' };
+    }
+    if (!res.ok) return { ok: false, ms: ms(), via: res.via, message: errorMessage(res.status, res.text) };
+    const models = modelIds(config.apiType, res.text);
+    if (!config.model) {
+      return { ok: true, ms: ms(), via: res.via, models, message: `连接通过，共 ${models.length} 个可用模型；还没填模型名` };
+    }
+    const listed = models.includes(config.model);
+    return {
+      ok: true,
+      ms: ms(),
+      via: res.via,
+      models,
+      listed,
+      message: listed
+        ? `连接及模型查询通过（列表共 ${models.length} 个）`
+        : `连接通过，但列表里没有该模型（共 ${models.length} 个），仍可能可用`,
+    };
+  }
+
+  /** 第二级测试：走和翻译完全相同的请求路径发一条极短请求，会消耗少量额度。 */
+  async function generateTest(config, signal) {
+    const t0 = Date.now();
+    const out = await translate({
+      config,
+      system: '你是字幕翻译助手。收到「编号<TAB>原文」后，只输出「编号<TAB>中文译文」一行，不要输出其他内容。',
+      user: '1\tこんにちは',
+      signal,
+    });
+    return { ok: true, ms: Date.now() - t0, via: out.via, sample: out.text.trim().replace(/\s+/g, ' ').slice(0, 40) };
+  }
+
+  LT.TextModel = { RequestError, resolve, buildRequest, collect, translate, modelIds, listModels, probe, generateTest };
 })();

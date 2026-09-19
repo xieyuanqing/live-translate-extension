@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased (updated 2026-09-18)
+## 0.2.0 — unreleased (updated 2026-09-19)
 
 ### Whole-video subtitles
 
@@ -22,11 +22,33 @@
 - Recognize captured URL objects, reject JSON error bodies as captions, bound caption refetch time, and avoid restoring the old CC state after video navigation.
 - Leave the text-model name empty until configured and identify 0.2.0 as an unpublished development version.
 
+### Caption reading hardening — 2026-09-19
+
+- Try every source that does not touch the player before triggering it: the captured body, the captured URL refetched as `json3`, the matching URL from `player.getAudioTrack()` (which usually carries `pot`), the track's `baseUrl` completed with a `pot` from any source plus the client, device, and version parameters, and another captured request with the track swapped.
+- Trigger the player by turning CC on (player API or the CC button) with the native caption container hidden meanwhile, then select the track through `setOption` if nothing happens within three seconds. Poll only for state changes, request each candidate URL at most once, and bound the whole read to 20 seconds.
+- Restore CC only when the video and player are unchanged and CC is still on, so a user who turned it off while waiting is not overridden. Serialize reads in the bridge and let the content script cancel an in-flight read on cancel or navigation.
+- Return a `tried` log with every result, print it in the console, and name the attempted paths in the error text. Prefer the player's currently selected track when it matches the configured source language; return absolute `baseUrl` values.
+- Add `LT.debug.probeCaptions()`, which reads and segments the chosen track without calling a model or writing cache, and `Json3.detectFormat`, which labels standard, scrolling-asr, karaoke, and animated tracks for logs only. Parsing output and `SEG_VERSION` are unchanged.
+
+### Text-model configuration — 2026-09-19
+
+- Replace the single text-model configuration with a list of provider configurations (name, type, base URL, key, model, concurrency, request path). Each can be tested and any one can be marked for whole-video subtitles; concurrency and request path belong to the configuration. The earlier `text*` fields are dropped without migration: enter the configuration once more.
+- Add two checks per configuration: a metadata or model-list query over GET that costs nothing and proves only that the key reaches the query endpoint and the model name exists, and a generation test that sends one tiny request through the real translation path. Add a model-name picker fed by the account's own model list; nothing is pre-filled.
+- Carry the HTTP method through both the direct and the relayed request paths so GET probes work through the service worker, and allow per-request timeouts.
+
+### Settings page — 2026-09-19
+
+- Reorganize Settings into seven sections with side navigation (a tab strip on narrow windows) and hash routing: 通用, 实时翻译, 整片字幕, 文字模型, 字幕外观, 数据, 关于. Live-only advanced parameters are collapsed by default.
+- Caption appearance: display mode (bilingual, translation only, original only), translation position, font family stack, weight, translation and source colors, source font ratio, plus a live preview rendered by the real caption layer in a responsive mock player. The display mode only filters what is shown; it does not stop translation, and original-only still needs a running task or a cache. In bilingual and original-only modes the whole-video mode now shows the source line for units whose translation has not arrived yet. `showSource` is replaced by `captionDisplayMode`.
+- Whole-video subtitles get an optional extra instruction that is appended after the scene prompt and therefore enters the cache fingerprint.
+- Data: export settings as JSON (keys excluded unless opted in), import with confirmation (files without keys keep the current keys), and reset to defaults with an option to keep keys and endpoint configurations. Caches are untouched by all three.
+- About: version, links, a button to Chrome's shortcut settings, and the console diagnostic hint. `tools/preview.js` builds an offline preview of the page with stubbed `chrome.*` APIs for layout checks.
+
 ### Verification
 
 - Self-tests cover json3 parsing, segmentation, chunk planning and priority, response parsing and validation, playback scheduling, cache fingerprints, subtitle prompts, request building, and SSE parsing.
-- Forty regression cases cover live sessions, whole-video tasks, network transport, and the page bridge using simulated browser APIs, caption tracks, model responses, and storage.
-- An offline browser check at 360 px popup width covered cached-language labels, show/hide, translation progress, cancel/resume controls, long errors, and the empty model field in Settings. No real provider or YouTube endpoint was exercised.
+- Sixty-five regression cases cover live sessions, whole-video tasks, network transport (including GET relay and per-request timeouts), the page bridge (capture, audio-track and composed URLs, CC trigger and restore, deadline, dedupe, cancel, navigation), track selection, the text-model configuration cards (rendered against a minimal fake DOM), and settings export/import using simulated browser APIs, caption tracks, model responses, and storage.
+- An offline browser check at 360 px popup width covered cached-language labels, show/hide, translation progress, cancel/resume controls, long errors, and the empty model field in Settings. Headless Chrome screenshots of the offline Settings preview (`tools/preview.js`) at 1280 px and 600 px covered all seven sections, the provider cards, and the caption preview. No real provider or YouTube endpoint was exercised.
 - These checks do not exercise YouTube's caption endpoint or a real model. Reading a real caption track, translating a real replay, and verifying playback sync in Chrome remain outstanding.
 
 ## 0.1.1 — 2026-09-13

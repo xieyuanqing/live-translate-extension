@@ -112,7 +112,7 @@ globalThis.LT = globalThis.LT || {};
 
   /**
    * @param {{scene:object, sourceLang:string, targetLang:string, isAsr:boolean,
-   *          metadataText:string, manualContext:string, tempContext?:string}} args
+   *          metadataText:string, manualContext:string, tempContext?:string, extraInstruction?:string}} args
    */
   function buildSubs(args) {
     const src = LT.sourceLabel(args.sourceLang);
@@ -132,6 +132,13 @@ globalThis.LT = globalThis.LT || {};
     out.push('');
     out.push(`【场景：${args.scene.label}】`);
     out.push(args.scene.instruction);
+    // 只对整片模式有意义的话（自动字幕的错听规律、这类视频的术语表），放在场景之后、格式之前
+    const extra = String(args.extraInstruction || '').trim();
+    if (extra) {
+      out.push('');
+      out.push('【整片字幕附加指令】');
+      out.push(extra);
+    }
     out.push('');
     out.push(SUBS_FORMAT);
 

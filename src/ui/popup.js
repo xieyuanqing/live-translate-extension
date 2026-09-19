@@ -194,7 +194,7 @@
       ? '修改后点下方「应用当前设置」即可生效。'
       : '开始翻译时生效；换视频或刷新后清空。';
 
-    if (LT.Settings.keyList(settings).length === 0 && !settings.textApiKey) {
+    if (LT.Settings.keyList(settings).length === 0 && !LT.Settings.provider(settings).apiKey) {
       const cached = !!status.video?.hasCache && !status.isLive;
       banner(cached ? '缓存可直接观看；翻译新内容需配置 API Key。' : '还没有填 API Key，先去设置里填一个再开始。', cached ? 'info' : '');
     } else if (running && status.phase === 'running') {

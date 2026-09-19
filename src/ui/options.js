@@ -1,3 +1,7 @@
+/**
+ * 设置页总控：分区导航、简单字段绑定、场景库、提示词预览、字幕缓存。
+ * 文字模型卡片、字幕外观预览、导入导出分别在 options-providers.js / options-style.js / options-data.js。
+ */
 (() => {
   const LT = globalThis.LT;
   const $ = (id) => document.getElementById(id);
@@ -5,36 +9,15 @@
   let settings = LT.DEFAULTS;
   let saveTimer = null;
 
-  const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'manualContext', 'textBaseUrl', 'textApiKey', 'textModel'];
+  const PAGES = ['general', 'live', 'video', 'models', 'style', 'data', 'about'];
+  const PAGE_KEY = 'lt-options-page';
+  const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'manualContext', 'subsExtraInstruction'];
   const SELECT_OPTIONS = {
     sourceLang: LT.SOURCE_LANGS,
     targetLang: LT.TARGET_LANGS,
-    textApiType: LT.TEXT_API_TYPES,
-    textRequestPath: [
-      { code: 'auto', label: '自动（先直连，失败改后台转发）' },
-      { code: 'direct', label: '只页面直连' },
-      { code: 'relay', label: '只经扩展后台转发' },
-    ],
   };
-  const CHECK_FIELDS = [
-    'autoStartLive',
-    'pauseOnAd',
-    'useMetadata',
-    'showSource',
-    'echoTargetLanguage',
-    'autoShowCached',
-  ];
-  const RANGE_FIELDS = [
-    'metadataLimit',
-    'captionLines',
-    'captionScale',
-    'captionBottom',
-    'captionOpacity',
-    'rotateSeconds',
-    'stabIdleMs',
-    'stabMaxChars',
-    'textConcurrency',
-  ];
+  const CHECK_FIELDS = ['autoStartLive', 'pauseOnAd', 'useMetadata', 'echoTargetLanguage', 'autoShowCached'];
+  const RANGE_FIELDS = ['metadataLimit', 'rotateSeconds', 'stabIdleMs', 'stabMaxChars'];
 
   // ---------- 保存 ----------
 
@@ -67,15 +50,79 @@
   function queueSave(patch) {
     Object.assign(settings, patch);
     renderPreview();
-    renderTextHints();
+    renderProviderSelect();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
-      // 不要用返回值覆盖 settings：场景卡片的事件闭包持有当前这些对象引用，
+      // 不要用返回值覆盖 settings：场景与接口配置卡片的事件闭包持有当前这些对象引用，
       // 换成存储里反序列化出来的新对象后，下一次输入就会写丢。
       await LT.Settings.save(settings);
       flashSaved();
       notifyTabs();
     }, 250);
+  }
+
+  /** 导入 / 恢复默认：整体写入后重载页面，所有卡片重新建立。 */
+  async function replaceSettings(next) {
+    clearTimeout(saveTimer);
+    await LT.Settings.save(next);
+    notifyTabs();
+    location.reload();
+  }
+
+  // ---------- 分区导航 ----------
+
+  function showPage(name) {
+    let page = name;
+    if (!PAGES.includes(page)) {
+      try {
+        page = localStorage.getItem(PAGE_KEY) || 'general';
+      } catch (_) {
+        page = 'general';
+      }
+      if (!PAGES.includes(page)) page = 'general';
+    }
+    for (const el of document.querySelectorAll('.page')) el.classList.toggle('active', el.dataset.page === page);
+    for (const a of document.querySelectorAll('.nav a')) {
+      if (a.getAttribute('href') === `#${page}`) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    }
+    try {
+      localStorage.setItem(PAGE_KEY, page);
+    } catch (_) {
+      /* 无痕模式等 */
+    }
+    if (page === 'style') style.refresh(); // 隐藏时容器宽度为 0，显示后重算字号
+    if (page === 'data') renderCache();
+  }
+
+  // ---------- 子模块 ----------
+
+  const providers = LT.OptionsUI.mountProviders({
+    box: $('providers'),
+    settings: () => settings,
+    save: () => queueSave({}),
+    select: (id) => queueSave({ subsProviderId: id }),
+  });
+  const style = LT.OptionsUI.mountStyle({ $, settings: () => settings, save: queueSave });
+  LT.OptionsUI.mountData({
+    $,
+    settings: () => settings,
+    replace: replaceSettings,
+    version: chrome.runtime.getManifest().version,
+  });
+
+  // ---------- 整片字幕：选用的接口配置 ----------
+
+  function renderProviderSelect() {
+    const el = $('subsProviderId');
+    el.replaceChildren();
+    for (const p of settings.providers) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name || (LT.TEXT_API_TYPES.find((t) => t.code === p.apiType) || {}).label || p.apiType;
+      el.appendChild(opt);
+    }
+    el.value = settings.subsProviderId;
   }
 
   // ---------- 场景库 ----------
@@ -177,68 +224,8 @@
         ? LT.Prompt.formatMetadata({ ...sampleMeta, isLive: false }, settings.metadataLimit)
         : '',
       manualContext: settings.manualContext,
+      extraInstruction: settings.subsExtraInstruction,
     });
-  }
-
-  // ---------- 整片字幕：接口地址提示与域名授权 ----------
-
-  function textOrigin() {
-    const base = settings.textBaseUrl || LT.TEXT_DEFAULT_BASE[settings.textApiType] || '';
-    try {
-      return new URL(base).origin;
-    } catch (_) {
-      return '';
-    }
-  }
-
-  function renderTextHints() {
-    const type = settings.textApiType === 'openai' ? 'openai' : 'gemini';
-    $('textBaseUrl').placeholder = LT.TEXT_DEFAULT_BASE[type];
-    $('textBaseHint').textContent =
-      type === 'openai'
-        ? '填到 /v1 为止，例如 https://api.openai.com/v1 或第三方兼容服务的地址。'
-        : '自建反代填到域名为止，程序会自动拼 /v1beta/models/… 路径。';
-    refreshGrant();
-  }
-
-  async function refreshGrant() {
-    const origin = textOrigin();
-    const state = $('grantState');
-    const button = $('grantHost');
-    if (!origin) {
-      state.textContent = '地址无效';
-      button.disabled = true;
-      return;
-    }
-    let granted = false;
-    try {
-      granted = await chrome.permissions.contains({ origins: [`${origin}/*`] });
-    } catch (_) {
-      granted = false;
-    }
-    button.disabled = granted;
-    state.textContent = granted
-      ? `${origin} 已可由扩展后台访问`
-      : `${origin} 尚未授权：页面直连失败时后台无法代发请求`;
-  }
-
-  async function grantHost() {
-    const origin = textOrigin();
-    if (!origin) return;
-    const url = new URL(origin);
-    // 带端口的本地网关（127.0.0.1:23000）先按原样申请；个别版本不接受带端口的模式，再退到不带端口
-    const candidates = [`${origin}/*`];
-    if (url.port) candidates.push(`${url.protocol}//${url.hostname}/*`);
-    let lastError = '';
-    for (const pattern of candidates) {
-      try {
-        if (await chrome.permissions.request({ origins: [pattern] })) break;
-      } catch (err) {
-        lastError = err && err.message ? err.message : String(err);
-      }
-    }
-    if (lastError) $('grantState').textContent = `授权失败：${lastError}`;
-    refreshGrant();
   }
 
   // ---------- 字幕缓存 ----------
@@ -347,12 +334,24 @@
       el.value = settings[id];
       syncRangeLabel(id);
       el.addEventListener('input', () => {
-        const v = id === 'captionScale' ? parseFloat(el.value) : parseInt(el.value, 10);
+        const v = parseInt(el.value, 10);
         settings[id] = v;
         syncRangeLabel(id);
         queueSave({ [id]: v });
       });
     }
+
+    renderProviderSelect();
+    $('subsProviderId').addEventListener('change', () => {
+      queueSave({ subsProviderId: $('subsProviderId').value });
+      providers.render();
+    });
+
+    $('addProvider').addEventListener('click', () => {
+      settings.providers.push(LT.Settings.newProvider({}));
+      queueSave({});
+      providers.render();
+    });
 
     $('addScene').addEventListener('click', () => {
       settings.scenes.push({
@@ -372,21 +371,28 @@
       renderScenes();
     });
 
-    $('grantHost').addEventListener('click', grantHost);
     $('refreshCache').addEventListener('click', renderCache);
     $('clearCache').addEventListener('click', async () => {
       if (!confirm('清空全部字幕缓存？已翻译的视频下次要重新调用模型。')) return;
       await LT.SubsCache.clearAll();
       renderCache();
     });
+
+    $('version').textContent = chrome.runtime.getManifest().version;
+    $('openShortcuts').addEventListener('click', () => {
+      chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+    });
+
+    window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
   }
 
   (async () => {
     settings = await LT.Settings.load();
     bind();
+    providers.render();
+    style.bind();
     renderScenes();
     renderPreview();
-    renderTextHints();
-    renderCache();
+    showPage(location.hash.slice(1));
   })();
 })();

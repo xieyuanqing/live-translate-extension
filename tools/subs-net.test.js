@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function harness(fetch) {
+function harness(fetch, seen = []) {
   let connections = 0;
   const ctx = vm.createContext({ URL, TypeError, DOMException, AbortController, TextDecoder,
     setTimeout, clearTimeout, fetch,
@@ -16,7 +16,8 @@ function harness(fetch) {
       return {
         onMessage: { addListener(fn) { receive = fn; } },
         onDisconnect: { addListener() {} }, disconnect() {},
-        postMessage() {
+        postMessage(msg) {
+          seen.push(msg);
           receive({ type: 'head', ok: true, status: 200 });
           receive({ type: 'chunk', text: 'reply' });
           receive({ type: 'end' });
@@ -71,4 +72,29 @@ test('后台请求完成后释放外部取消监听器', async () => {
   signal.removeEventListener = (...args) => { listeners--; return remove(...args); };
   await h.net.post({ ...req, path: 'relay', signal });
   assert.equal(listeners, 0);
+});
+
+test('GET 请求的方法一路传到后台，直连与转发都不带正文', async () => {
+  const seen = [];
+  const calls = [];
+  const h = harness(async (_url, init) => { calls.push(init); throw new TypeError('Failed to fetch'); }, seen);
+  const res = await h.net.request({ ...req, method: 'get' });
+  assert.equal(res.via, 'relay');
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[0].body, undefined);
+  assert.equal(seen[0].method, 'GET');
+  assert.equal(seen[0].body, undefined);
+  const posted = await h.net.post({ ...req, path: 'relay' });
+  assert.equal(posted.via, 'relay');
+  assert.equal(seen[1].method, 'POST');
+  assert.equal(seen[1].body, '{}');
+});
+
+test('单独给的超时时间优先于默认两分钟', async () => {
+  const h = harness((_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+  }));
+  const t0 = Date.now();
+  await assert.rejects(h.net.request({ ...req, method: 'GET', timeoutMs: 5 }), /超时/);
+  assert.ok(Date.now() - t0 < 1000);
 });
