@@ -7,6 +7,14 @@ const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const ROOT = path.join(__dirname, '..');
 const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
+// 原生 WebCrypto 在线程池中完成，不能用固定事件循环轮数判断任务已到达某阶段。
+async function waitFor(predicate, message) {
+  const deadline = Date.now() + 5000;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, message);
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 function context(extra = {}) {
   const ctx = vm.createContext({ console, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, DataView,
@@ -122,13 +130,19 @@ test('offscreen 创建期间取消，不会在文档创建完成后突然播放'
 test('快速跨页面启动只播放最新请求；重播复用音频，断开/导航停止', async () => {
   const gates=[deferred(),deferred()]; let count=0;
   const h=tasks({synthesize:()=>gates[count++].promise}); const p=h.port(), q=h.port(4);
-  p.receive({type:'speak',text:'古い',requestId:1}); await flush();
-  q.receive({type:'speak',text:'新しい',requestId:2}); await flush();
+  p.receive({type:'speak',text:'古い',requestId:1});
+  await waitFor(() => count === 1, '旧任务应进入合成阶段');
+  q.receive({type:'speak',text:'新しい',requestId:2});
+  await waitFor(() => count === 2, '新任务应进入合成阶段');
   gates[0].resolve({bytes:Uint8Array.from([1]),mime:'audio/mpeg'});
-  gates[1].resolve({bytes:Uint8Array.from([2]),mime:'audio/mpeg'}); await flush();
+  gates[1].resolve({bytes:Uint8Array.from([2]),mime:'audio/mpeg'});
+  await waitFor(() => h.commands.some(item=>item.command==='play'), '最新任务应开始播放');
   assert.equal(h.commands.filter(item=>item.command==='play').length,1);
-  q.receive({type:'speak',text:'新しい',requestId:3}); await flush(); assert.equal(count,2);
-  h.updates[0](7,{url:'https://example.com/new'}); await flush();
+  q.receive({type:'speak',text:'新しい',requestId:3});
+  await waitFor(() => h.commands.filter(item=>item.command==='play').length === 2, '重播应复用缓存开始播放');
+  assert.equal(count,2);
+  h.updates[0](7,{url:'https://example.com/new'});
+  await waitFor(() => h.commands.at(-1).command === 'stop', '导航应停止播放');
   assert.equal(q.replies.at(-1).type,'close'); assert.equal(h.commands.at(-1).command,'stop');
 });
 test('右键按准确 frame 注入和投递，没有永久全站内容脚本', async () => {
