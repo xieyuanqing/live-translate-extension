@@ -60,6 +60,7 @@ async function sessionHarness() {
     status() { return { phase: 'idle' }; } start(args) { subStarts.push(args); } cancel() {} deactivate() {}
     onVideoChanged() {} tick() {} setVisible() {} updateSettings() {} async clearCache() {}
   };
+  LT.PlayerControls = class { mount() {} unmount() {} update() {} };
   LT.GeminiLiveClient = class {
     constructor(opts) { this.opts = opts; this.starts = 0; this.running = false; clients.push(this); }
     start() { this.starts++; this.running = true; } stop() { this.running = false; }

@@ -21,6 +21,30 @@ globalThis.LT = globalThis.LT || {};
     onStatus: () => pushStatus(),
   });
 
+  const playerControls = new LT.PlayerControls({
+    onToggleCaptions: () => {
+      if (!LT.YouTube.isWatchPage() || currentVideoId !== LT.YouTube.videoIdFromUrl()) return;
+      if (session.phase !== 'idle' || currentMeta?.isLive) setLiveCaptionsVisible(!liveCaptionsVisible);
+      else videoSubs.setVisible(!videoSubs.visible);
+    },
+    onToggleTranslation: () => {
+      if (!LT.YouTube.isWatchPage() || currentVideoId !== LT.YouTube.videoIdFromUrl()) return;
+      if (session.phase !== 'idle' || currentMeta?.isLive) {
+        if (session.phase === 'idle') {
+          userStoppedFor = '';
+          start('播放器控制栏');
+        } else {
+          userStoppedFor = currentVideoId;
+          stop();
+        }
+      } else if (videoStartPending || ['reading', 'translating'].includes(videoSubs.status().phase)) {
+        cancelVideoSubs();
+      } else if (videoSubs.status().phase !== 'ready') {
+        startVideoSubs(false);
+      }
+    },
+  });
+
   const session = {
     phase: 'idle', // idle | starting | running
     conn: '',
@@ -40,6 +64,7 @@ globalThis.LT = globalThis.LT || {};
   let currentMeta = null;
   let autoStartedFor = '';
   let userStoppedFor = '';
+  let liveCaptionsVisible = true; // 仅影响本场直播的字幕显示，不停止音频采集或模型请求
   let gateHint = ''; // applyGate 自己挂上去的提示，条件消失后要由它负责收掉
   let sessionGeneration = 0; // 停止后作废仍在等待播放器 / 音频挂载的启动操作
   let videoStartPending = false; // 读取设置也属于可取消的整片字幕启动过程
@@ -69,6 +94,8 @@ globalThis.LT = globalThis.LT || {};
       videoId: currentVideoId,
       title: currentMeta ? currentMeta.title : '',
       isLive: currentMeta ? currentMeta.isLive : false,
+      modeKnown: (currentMeta?.videoId === currentVideoId) || session.phase !== 'idle',
+      liveCaptionsVisible,
       liveProvider: session.snapshot ? session.snapshot.provider : settings.liveProvider,
       contextStatus: session.snapshot ? session.snapshot.contextStatus : '',
       generatedTerms: session.snapshot ? session.snapshot.generatedTerms : 0,
@@ -87,9 +114,11 @@ globalThis.LT = globalThis.LT || {};
   }
 
   function pushStatus() {
+    const snapshot = statusSnapshot();
+    playerControls.update(snapshot);
     try {
       chrome.runtime
-        .sendMessage({ type: LT.MSG.STATUS, payload: statusSnapshot() })
+        .sendMessage({ type: LT.MSG.STATUS, payload: snapshot })
         .catch(() => {});
     } catch (_) {
       // 扩展被重新加载后旧内容脚本会失效，忽略
@@ -464,6 +493,12 @@ globalThis.LT = globalThis.LT || {};
     pushStatus();
   }
 
+  function setLiveCaptionsVisible(visible) {
+    liveCaptionsVisible = !!visible;
+    caption.setVisible(liveCaptionsVisible && !(settings.pauseOnAd && LT.YouTube.adShowing()));
+    pushStatus();
+  }
+
   // ---------- 广告 / 暂停 / 静音时不发音频 ----------
 
   function applyGate() {
@@ -474,7 +509,7 @@ globalThis.LT = globalThis.LT || {};
     const silent = !!video && (video.muted || video.volume === 0);
     session.tap.setGate(!ad && !paused && !silent);
     if (ad || paused || silent) session.level = 0;
-    caption.setVisible(!ad);
+    caption.setVisible(liveCaptionsVisible && !ad);
 
     // 连接本身有问题时以连接状态为准，不抢它的提示位
     if (session.conn !== 'ready' && session.conn !== 'rotating') {
@@ -502,13 +537,19 @@ globalThis.LT = globalThis.LT || {};
   function ensureMounted() {
     if (!LT.YouTube.isWatchPage()) {
       if (caption.mounted) caption.unmount();
+      playerControls.unmount();
       return;
     }
     const player = LT.YouTube.player();
     if (player && (!caption.mounted || caption.player !== player)) {
       caption.mount(player);
       caption.applySettings(settings);
+      if (session.phase === 'running') applyGate();
     }
+    if (player) {
+      playerControls.mount(player);
+      playerControls.update(statusSnapshot());
+    } else playerControls.unmount();
   }
 
   async function handleVideoChanged() {
@@ -516,6 +557,7 @@ globalThis.LT = globalThis.LT || {};
     if (id === currentVideoId) return;
     currentVideoId = id;
     currentMeta = null;
+    liveCaptionsVisible = true;
     tempContext = ''; // 临时补充跟着视频走，换视频即作废
     previewCache = null;
     liveReview = null;
@@ -593,10 +635,7 @@ globalThis.LT = globalThis.LT || {};
         startVideoSubs(!!(msg.payload && msg.payload.force));
         break;
       case LT.MSG.VS_CANCEL:
-        if (videoStartPending) sessionGeneration++;
-        videoStartPending = false;
-        videoSubs.cancel();
-        pushStatus();
+        cancelVideoSubs();
         break;
       case LT.MSG.VS_SET_VISIBLE:
         videoSubs.setVisible(!!msg.payload);
@@ -614,6 +653,13 @@ globalThis.LT = globalThis.LT || {};
     }
     return undefined;
   });
+
+  function cancelVideoSubs() {
+    if (videoStartPending) sessionGeneration++;
+    videoStartPending = false;
+    videoSubs.cancel();
+    pushStatus();
+  }
 
   /** 整片字幕：读取当前设置作为本次任务的快照；正在实时翻译就先停掉。 */
   async function startVideoSubs(force) {
@@ -653,6 +699,7 @@ globalThis.LT = globalThis.LT || {};
   LT.YouTube.onMetaPush((meta) => {
     if (meta && meta.videoId === currentVideoId && meta.videoId === LT.YouTube.videoIdFromUrl()) {
       currentMeta = meta;
+      pushStatus();
       if (meta.videoId === LT.YouTube.videoIdFromUrl()) maybeAutoStart();
     }
   });

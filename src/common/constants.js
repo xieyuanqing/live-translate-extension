@@ -258,6 +258,7 @@ globalThis.LT = globalThis.LT || {};
     CANCEL_COMMENT_TRANSLATION: 'lt:cancel-comment-translation',
     CHAT_STATUS: 'lt:chat-status',
     QUERY_CHAT_STATUS: 'lt:query-chat-status',
+    PREPARE_CHAT: 'lt:prepare-chat',
     // 整片字幕
     VS_START: 'lt:vs-start', // payload: { force?: boolean }
     VS_CANCEL: 'lt:vs-cancel',

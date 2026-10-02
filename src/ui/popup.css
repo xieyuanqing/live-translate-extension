@@ -64,6 +64,9 @@ textarea { min-height: 56px; max-height: 120px; }
 .text-check input { order: 2; }
 .text-check > span { order: 1; min-width: 0; }
 .text-check small { display: block; font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 1px; }
+.chat-actions { display: flex; align-items: center; gap: 9px; padding: 8px 0 10px; border-bottom: 1px solid var(--divider); }
+.chat-actions button { flex: 0 0 auto; padding: 7px 10px; }
+#chatPrepareProgress { min-width: 0; overflow-wrap: anywhere; }
 .text-actions { display: flex; gap: 6px; margin-top: 10px; }
 .text-actions button { flex: 1; min-width: 0; padding: 7px 8px; }
 #textState { margin: 7px 0; white-space: pre-line; overflow-wrap: anywhere; font-size: 11px; line-height: 1.65; }

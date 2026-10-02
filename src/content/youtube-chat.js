@@ -1,4 +1,4 @@
-/** YouTube 聊天帧：Chrome Translator 本地翻译，独立开关、下载提示、有限队列与页面内缓存。 */
+/** YouTube 聊天帧：Chrome Translator 本地翻译，状态送往扩展弹窗，有限队列与页面内缓存。 */
 (() => {
   if (!/^\/live_chat(?:_replay)?\/?$/.test(location.pathname)) return;
   const LT = globalThis.LT;
@@ -13,7 +13,7 @@
   let error = '';
   let translatedCount = 0;
   let dropped = 0;
-  let controls = null;
+  let downloadProgress = '';
   let scanTimer = null;
   let processing = false;
   let detector = null;
@@ -31,42 +31,8 @@
   const active = () => settings.enableChatTranslation;
 
   function publish() {
-    const labels = { off: '聊天翻译已关闭', waiting: '首次使用请点击「准备本地翻译」',
-      preparing: '准备/下载本地语言包…', ready: '本地翻译中', error: '本地翻译暂不可用' };
-    if (controls) {
-      controls.state.textContent = error || `${labels[phase] || phase} · 已译 ${translatedCount} 条` + (dropped ? ` · 跳过过时消息 ${dropped} 条` : '');
-      controls.prepare.disabled = phase === 'preparing';
-      controls.prepare.hidden = phase === 'ready';
-    }
     chrome.runtime.sendMessage({ type: LT.MSG.CHAT_STATUS, payload: { videoId, phase, enabled: active(),
-      translated: translatedCount, pending: queue.length, dropped, error } }).catch(() => {});
-  }
-
-  function mount() {
-    if (controls?.host.isConnected) return;
-    const box = document.querySelector('yt-live-chat-renderer #contents') || document.querySelector('yt-live-chat-renderer') || document.body;
-    if (!box) return;
-    const host = make('div');
-    host.className = 'lt-yt-text lt-yt-chat-controls';
-    const actions = make('div');
-    actions.className = 'lt-yt-text-actions';
-    const label = make('span', '流译');
-    const prepare = make('button', '准备本地翻译');
-    const stopButton = make('button', '关闭');
-    stopButton.setAttribute('aria-label', '关闭聊天翻译');
-    prepare.type = stopButton.type = 'button';
-    const state = make('div');
-    state.setAttribute('role', 'status');
-    actions.append(label, prepare, stopButton);
-    host.append(actions, state);
-    box.prepend(host);
-    controls = { host, prepare, state };
-    prepare.addEventListener('click', () => prepareLocal(true));
-    stopButton.addEventListener('click', () => {
-      stop();
-      LT.Settings.save({ enableChatTranslation: false }).catch(() => {});
-    });
-    publish();
+      translated: translatedCount, pending: queue.length, dropped, error, pendingLanguage, downloadProgress } }).catch(() => {});
   }
 
   function stop({ remove = false } = {}) {
@@ -82,19 +48,19 @@
     seen = new WeakMap();
     phase = 'off';
     error = '';
+    downloadProgress = '';
     if (remove) {
-      controls?.host.remove();
-      controls = null;
       for (const node of document.querySelectorAll('.lt-yt-chat-result')) node.remove();
     }
     publish();
   }
 
-  function progress(monitor, run) {
+  function progress(monitor, run, name) {
     monitor.addEventListener('downloadprogress', event => {
-      if (!isCurrent(run) || !controls) return;
+      if (!isCurrent(run)) return;
       const value = Number(event.loaded);
-      controls.state.textContent = Number.isFinite(value) ? `下载本地语言包 ${Math.round(value * 100)}%…` : '正在下载本地语言包…';
+      downloadProgress = Number.isFinite(value) ? `${name} ${Math.round(value * 100)}%` : `${name}下载中`;
+      publish();
     });
   }
 
@@ -105,23 +71,25 @@
     if (!globalThis.Translator?.availability || !globalThis.Translator?.create) {
       throw new Error('此 Chrome 未提供本地 Translator API，请使用支持此功能的桌面版 Chrome');
     }
-    const availability = await globalThis.Translator.availability({ sourceLanguage: source, targetLanguage: target });
-    if (!isCurrent(run) || signal.aborted) throw new DOMException('已取消', 'AbortError');
-    if (availability === 'unavailable') throw new Error(`Chrome 本地翻译不支持 ${source} → ${target}`);
-    if (availability !== 'available' && !allowDownload) {
-      pendingLanguage = source;
-      throw new Error(`需要准备 ${source} → ${target} 的本地语言包，请点击「准备本地翻译」`);
+    if (!allowDownload) {
+      const availability = await globalThis.Translator.availability({ sourceLanguage: source, targetLanguage: target });
+      if (!isCurrent(run) || signal.aborted) throw new DOMException('已取消', 'AbortError');
+      if (availability === 'unavailable') throw new Error(`Chrome 本地翻译不支持 ${source} → ${target}`);
+      if (availability !== 'available') {
+        pendingLanguage = source;
+        throw new Error(`需要准备 ${source} → ${target} 的本地语言包，请点击「准备本地翻译」`);
+      }
     }
     const translator = await globalThis.Translator.create({ sourceLanguage: source, targetLanguage: target,
-      signal, monitor: monitor => progress(monitor, run) });
+      signal, monitor: monitor => progress(monitor, run, `${source} → ${target}`) });
     if (!isCurrent(run) || signal.aborted) { translator.destroy(); throw new DOMException('已取消', 'AbortError'); }
     translators.set(key, translator);
     return translator;
   }
 
   async function prepareLocal(allowDownload) {
-    if (!active() || phase === 'preparing') return;
-    mount();
+    if (!active()) return { ok: false, error: '请先打开弹幕自动翻译' };
+    if (phase === 'preparing' && !allowDownload) return { ok: false, error: '正在准备本地翻译' };
     const source = pendingLanguage || (settings.sourceLang === 'auto' ? 'ja' : language(settings.sourceLang));
     stop();
     const run = generation;
@@ -136,30 +104,35 @@
         if (!globalThis.LanguageDetector?.availability || !globalThis.LanguageDetector?.create) {
           throw new Error('此 Chrome 不支持本地语言检测，请先选择具体的源语言');
         }
-        const availability = await globalThis.LanguageDetector.availability();
-        if (!isCurrent(run) || signal.aborted) return;
-        if (availability === 'unavailable') throw new Error('本地语言检测不可用，请先选择具体的源语言');
-        if (availability !== 'available' && !allowDownload) throw new Error('请点击「准备本地翻译」下载语言检测模型和语言包');
-        const next = await globalThis.LanguageDetector.create({ signal, monitor: monitor => progress(monitor, run) });
+        if (!allowDownload) {
+          const availability = await globalThis.LanguageDetector.availability();
+          if (!isCurrent(run) || signal.aborted) return;
+          if (availability === 'unavailable') throw new Error('本地语言检测不可用，请先选择具体的源语言');
+          if (availability !== 'available') throw new Error('请点击「准备本地翻译」下载语言检测模型和语言包');
+        }
+        const next = await globalThis.LanguageDetector.create({ signal, monitor: monitor => progress(monitor, run, '语言检测') });
         if (!isCurrent(run) || signal.aborted) { next.destroy(); return; }
         detector = next;
       };
       // 两项创建都由同一次点击启动，不能等一个模型下载完才请求另一个。
       await Promise.all([prepareDetector(), source === language(settings.targetLang)
         ? Promise.resolve() : getTranslator(source, allowDownload, signal, run)]);
-      if (!isCurrent(run) || signal.aborted) return;
+      if (!isCurrent(run) || signal.aborted) return { ok: false, error: '已取消' };
       pendingLanguage = '';
       phase = 'ready';
       error = '';
+      downloadProgress = '';
       publish();
       scheduleScan();
+      return { ok: true };
     } catch (err) {
-      if (!isCurrent(run) || signal.aborted) return;
+      if (!isCurrent(run) || signal.aborted) return { ok: false, error: '已取消' };
       const message = err?.message || '本地翻译初始化失败，请点击重试';
       stop();
       phase = allowDownload ? 'error' : 'waiting';
       error = message;
       publish();
+      return { ok: false, error: message };
     }
   }
 
@@ -178,11 +151,9 @@
       translatedCount = dropped = 0;
       pendingLanguage = '';
       phase = 'waiting';
-      mount();
       prepareLocal(false);
       return;
     }
-    mount();
     if (phase !== 'ready') return;
     for (const row of [...document.querySelectorAll(selector)].slice(-80)) {
       const source = row.querySelector('#message');
@@ -262,7 +233,7 @@
     }
   }
 
-  async function loadSettings() {
+  async function loadSettings(autoPrepare = true) {
     const revision = ++settingsRevision;
     const next = await LT.Settings.load();
     if (revision !== settingsRevision) return;
@@ -274,14 +245,28 @@
       pendingLanguage = '';
       translatedCount = dropped = 0;
       cache.clear();
-      if (active()) { mount(); phase = 'waiting'; publish(); prepareLocal(false); }
+      if (active()) { phase = 'waiting'; publish(); if (autoPrepare) prepareLocal(false); }
     }
     for (const result of document.querySelectorAll('.lt-yt-chat-result')) T.applyResultStyle(result, settings, 'chat');
     scheduleScan();
   }
 
   chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.settings) loadSettings().catch(() => {}); });
-  chrome.runtime.onMessage.addListener(msg => { if (msg?.type === LT.MSG.QUERY_CHAT_STATUS) publish(); });
+  chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+    if (msg?.type === LT.MSG.QUERY_CHAT_STATUS) { publish(); return; }
+    if (msg?.type !== LT.MSG.PREPARE_CHAT) return;
+    if (msg.payload?.videoId && msg.payload.videoId !== new URL(location.href).searchParams.get('v')) {
+      reply({ ok: false, error: '聊天页面已切换，请重新打开扩展弹窗' });
+      return;
+    }
+    loadSettings(false).then(() => {
+      if (msg.payload?.sourceLang !== settings.sourceLang || msg.payload?.targetLang !== settings.targetLang) {
+        return { ok: false, error: '语言设置已变化，请重新点击准备本地翻译' };
+      }
+      return prepareLocal(true);
+    }).then(reply, err => reply({ ok: false, error: err?.message || '聊天页面未能准备本地翻译' }));
+    return true;
+  });
   const observer = new MutationObserver(records => { if (records.some(record => !T.ownMutation(record))) scheduleScan(); });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   loadSettings().catch(() => {});

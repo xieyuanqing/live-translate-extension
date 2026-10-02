@@ -1,0 +1,76 @@
+/* 流译只占 YouTube 底部原生控制栏里的两个位置，不覆盖视频画面。 */
+.ytp-right-controls > .lt-player-controls {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 100%;
+  vertical-align: top;
+  white-space: nowrap;
+  font: 12px/1 Roboto, 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+.lt-player-controls button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 46px;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+
+.lt-player-controls button:disabled { cursor: default; opacity: 0.5; }
+.lt-player-controls__captions:disabled { opacity: 1; }
+.lt-player-controls button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.13); }
+.lt-player-controls button:focus-visible { outline: 2px solid #8db8ff; outline-offset: -3px; }
+
+.lt-player-controls__captions img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+.lt-player-controls__badge {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  min-width: 24px;
+  padding: 2px 3px;
+  border-radius: 8px;
+  background: #272727;
+  color: #c8c8c8;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.lt-player-controls[data-active='yes'] .lt-player-controls__badge {
+  background: #2670d5;
+  color: #fff;
+}
+
+.lt-player-controls__action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 19px;
+  border-radius: 12px;
+  background: #f8f8f8;
+  color: #151515;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.lt-player-controls__action[data-running='yes'] .lt-player-controls__action-icon {
+  background: #2670d5;
+  color: #fff;
+}

@@ -97,11 +97,13 @@
         "src/common/live-context.js",
         "src/subs/cache.js",
         "src/content/video-subs.js",
+        "src/content/player-controls.js",
         "src/content/main.js",
         "src/content/youtube-comments.js"
       ],
       "css": [
         "src/content/caption-layer.css",
+        "src/content/player-controls.css",
         "src/content/youtube-text.css"
       ]
     },
@@ -125,7 +127,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/audio/pcm16k.js"
+        "src/audio/pcm16k.js",
+        "icons/icon32.png"
       ],
       "matches": [
         "https://www.youtube.com/*"

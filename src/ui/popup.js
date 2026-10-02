@@ -13,6 +13,9 @@
   let contextTabVideoId = '';
   let contextLoading = false;
   let textStatus = null;
+  let chatPreparing = false;
+  let chatPrepareController = null;
+  let chatPrepareMessage = '';
 
   const CONN_LABEL = {
     '': '未开始',
@@ -40,6 +43,16 @@
       return await chrome.tabs.sendMessage(tabId, { type, payload }, { frameId: 0 });
     } catch (_) {
       return null; // 内容脚本还没注入（比如刚装完扩展没刷新页面）
+    }
+  }
+
+  async function sendChat(type, payload) {
+    if (tabId == null) return null;
+    try {
+      // 不指定 frameId：只有聊天帧响应此消息，主页面内容脚本会忽略。
+      return await chrome.tabs.sendMessage(tabId, { type, payload });
+    } catch (_) {
+      return null;
     }
   }
 
@@ -243,19 +256,100 @@
     $('translateVisibleComments').disabled = !show || !settings.enableCommentTranslation || !!comments?.busy;
     $('cancelCommentTranslation').disabled = !comments?.busy;
     const chat = textStatus?.chat;
-    const chatLabels = { off: '已关闭', waiting: '请在聊天区准备语言包', preparing: '准备/下载语言包中', ready: '本地翻译中', error: '不可用' };
+    const chatLabels = { off: '已关闭', waiting: '请点击「准备本地翻译」', preparing: '准备/下载语言包中', ready: '本地翻译中', error: '不可用' };
+    $('chatPrepareActions').classList.toggle('hidden', !settings.enableChatTranslation ||
+      (chat?.phase === 'ready' && !chatPreparing && !chatPrepareMessage));
+    $('prepareChatTranslation').classList.toggle('hidden', !settings.enableChatTranslation || chat?.phase === 'ready');
+    $('prepareChatTranslation').disabled = !show || chatPreparing || chat?.phase === 'preparing';
+    $('chatPrepareProgress').textContent = chatPrepareMessage;
     const lines = [];
     if (settings.enableChatTranslation) lines.push(chat
-      ? `聊天：${chat.error || chatLabels[chat.phase] || chat.phase}${chat.translated ? ` · 已译 ${chat.translated} 条` : ''}`
-      : '聊天：请在 YouTube 聊天区查看本地翻译状态');
+      ? `聊天：${chat.error || chat.downloadProgress || chatLabels[chat.phase] || chat.phase}${chat.translated ? ` · 已译 ${chat.translated} 条` : ''}`
+      : '聊天：等待聊天页面连接');
     if (settings.enableCommentTranslation) lines.push(comments?.error ||
       (comments?.busy ? `评论：等待/翻译中 ${comments.pending || 0} 条` : `评论：按需翻译${comments?.translated ? ` · 已译 ${comments.translated} 条` : ''}`));
     $('textState').textContent = lines.join('\n') || '两项独立开关，不需要启动字幕翻译。';
   }
 
+  function cancelChatPreparation() {
+    chatPrepareController?.abort();
+    chatPrepareController = null;
+    chatPreparing = false;
+    chatPrepareMessage = '';
+    renderTextStatus();
+  }
+
+  $('prepareChatTranslation').addEventListener('click', async () => {
+    if (chatPreparing || !settings.enableChatTranslation || !status?.onWatchPage) return;
+    const sourceLang = $('sourceLang').value;
+    const targetLang = $('targetLang').value;
+    const videoId = status.videoId;
+    const requestedSource = sourceLang === 'auto' ? (textStatus?.chat?.pendingLanguage || 'ja') : sourceLang;
+    const source = requestedSource === 'zh-Hans' ? 'zh' : requestedSource;
+    const target = targetLang === 'zh-Hans' ? 'zh' : targetLang;
+    const controller = new AbortController();
+    chatPrepareController = controller;
+    chatPreparing = true;
+    chatPrepareMessage = '正在检查本地语言包…';
+    renderTextStatus();
+
+    const progress = new Map();
+    const monitor = name => session => session.addEventListener('downloadprogress', event => {
+      if (controller.signal.aborted) return;
+      const value = Number(event.loaded);
+      progress.set(name, Number.isFinite(value) ? `${name} ${Math.round(value * 100)}%` : `${name}下载中`);
+      chatPrepareMessage = [...progress.values()].join(' · ');
+      renderTextStatus();
+    });
+    let popupError = '';
+    try {
+      // Chrome 首次下载要求 create() 所在页面已有用户激活；两个 create 都在这次点击中发起。
+      const needsDetector = sourceLang === 'auto';
+      const needsTranslator = source !== target;
+      if ((needsDetector && !globalThis.LanguageDetector?.create) ||
+          (needsTranslator && !globalThis.Translator?.create)) {
+        popupError = '扩展弹窗不支持 Chrome 本地模型 API';
+      } else {
+        const tasks = [];
+        if (needsDetector) tasks.push(globalThis.LanguageDetector.create({ signal: controller.signal,
+          monitor: monitor('语言检测') }).then(instance => instance.destroy()));
+        if (needsTranslator) tasks.push(globalThis.Translator.create({ sourceLanguage: source, targetLanguage: target,
+          signal: controller.signal, monitor: monitor(`${source} → ${target}`) }).then(instance => instance.destroy()));
+        const results = await Promise.allSettled(tasks);
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+      }
+    } catch (err) {
+      popupError = err?.message || '扩展弹窗准备本地模型失败';
+    }
+    if (controller.signal.aborted || chatPrepareController !== controller) return;
+    chatPrepareMessage = popupError ? '尝试由聊天页面准备模型…' : '语言包已准备，正在连接聊天…';
+    renderTextStatus();
+    try {
+      await settingsSave;
+      if (controller.signal.aborted || chatPrepareController !== controller) return;
+      if (status?.videoId !== videoId) throw new Error('视频已切换，请在当前页面重新准备');
+      if (settings.sourceLang !== sourceLang || settings.targetLang !== targetLang) throw new Error('语言设置尚未保存，请重试');
+      const result = await sendChat(LT.MSG.PREPARE_CHAT, { videoId, sourceLang, targetLang });
+      if (!result?.ok) throw new Error(result?.error || '聊天页面未响应，请刷新 YouTube 页面后重试');
+      chatPrepareMessage = '';
+      await refresh();
+    } catch (err) {
+      if (controller.signal.aborted || chatPrepareController !== controller) return;
+      chatPrepareMessage = popupError ? `${popupError}；${err?.message || '聊天页面准备失败'}` : err?.message || '准备失败，请重试';
+    } finally {
+      if (chatPrepareController === controller) {
+        chatPrepareController = null;
+        chatPreparing = false;
+        renderTextStatus();
+      }
+    }
+  });
+
   for (const [id, key] of [['chatTranslationToggle', 'enableChatTranslation'], ['commentTranslationToggle', 'enableCommentTranslation']]) {
     $(id).addEventListener('change', event => {
       const checked = event.target.checked;
+      if (key === 'enableChatTranslation' && !checked) cancelChatPreparation();
       settingsSave = settingsSave.then(async () => {
         settings = await LT.Settings.save({ [key]: checked });
         await send(LT.MSG.SETTINGS_CHANGED);
@@ -432,6 +526,7 @@
     ['targetLang', 'targetLang'],
   ]) {
     $(id).addEventListener('change', (e) => {
+      cancelChatPreparation();
       const value = e.target.value;
       settingsSave = settingsSave.then(async () => {
         settings = await LT.Settings.save({ [key]: value });
@@ -457,6 +552,6 @@
     }).catch(() => {});
   });
 
-  window.addEventListener('unload', () => clearInterval(timer));
+  window.addEventListener('unload', () => { clearInterval(timer); chatPrepareController?.abort(); });
   init();
 })();
