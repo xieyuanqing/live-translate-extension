@@ -21,6 +21,7 @@ globalThis.LT = globalThis.LT || {};
     const copy = JSON.parse(JSON.stringify(LT.Settings.normalize(settings)));
     if (!includeKeys) {
       copy.apiKeys = '';
+      copy.qwenApiKey = '';
       for (const p of copy.providers) p.apiKey = '';
     }
     return { app: APP, version, exportedAt: new Date().toISOString(), includesKeys: !!includeKeys, settings: copy };
@@ -34,6 +35,7 @@ globalThis.LT = globalThis.LT || {};
     const next = LT.Settings.normalize(raw.settings);
     if (!raw.includesKeys) {
       next.apiKeys = current.apiKeys;
+      next.qwenApiKey = current.qwenApiKey;
       for (const p of next.providers) {
         if (p.apiKey) continue;
         const own = (current.providers || []).find((q) => q.id === p.id);
@@ -63,6 +65,126 @@ globalThis.LT = globalThis.LT || {};
     const state = (text) => {
       $('dataState').textContent = text;
     };
+    const logState = (text) => { $('liveLogState').textContent = text; };
+
+    function logExport(items) {
+      return {
+        app: APP,
+        format: 'live-log-export-v1',
+        version: ctx.version,
+        exportedAt: new Date().toISOString(),
+        logs: items.map(({ key, ...entry }) => entry),
+      };
+    }
+
+    async function refreshLogs() {
+      const box = $('liveLogList');
+      box.replaceChildren();
+      let logs;
+      try { logs = await LT.LiveLog.list(); }
+      catch (err) { logState('读取日志失败：' + (err && err.message || err)); return; }
+      $('liveLogTotal').textContent = logs.length ? `共 ${logs.length} 场` : '还没有直播日志';
+      $('exportAllLiveLogs').disabled = logs.length === 0;
+      $('clearLiveLogs').disabled = !logs.some((entry) => entry.endedAt);
+      for (const entry of logs) {
+        const row = document.createElement('div');
+        row.className = 'cache-item';
+        const info = document.createElement('div');
+        info.className = 'cache-info';
+        const title = document.createElement('div');
+        title.className = 'cache-title';
+        title.textContent = entry.details?.metadata?.title || entry.videoId || '未命名直播';
+        const summary = document.createElement('div');
+        summary.className = 'muted small';
+        summary.textContent = [new Date(entry.startedAt).toLocaleString(), entry.provider === 'qwen' ? '千问' : 'Gemini',
+          entry.level === 'detailed' ? '详细' : '基础', `${entry.events.length} 条事件`,
+          entry.droppedEvents ? `前段已丢弃 ${entry.droppedEvents} 条` : '',
+          entry.endedAt ? '已结束' : '进行中'].filter(Boolean).join(' · ');
+        info.append(title, summary);
+        const view = document.createElement('button');
+        view.className = 'small';
+        view.textContent = '提示词';
+        view.disabled = !entry.details;
+        let expanded = null;
+        view.addEventListener('click', async () => {
+          if (expanded) { expanded.remove(); expanded = null; view.textContent = '提示词'; return; }
+          const latest = (await LT.LiveLog.list()).find(item => item.key === entry.key) || entry;
+          const details = LT.LiveLog.safe(latest.details || {}, LT.LiveLog.secretsFrom(ctx.settings()), Infinity);
+          const generated = details.generatedContext;
+          const terms = Object.entries(generated?.phrases || {});
+          const effective = latest.provider === 'qwen'
+            ? JSON.stringify({ language: latest.targetLang === 'zh-Hans' ? 'zh' : latest.targetLang,
+                ...(Object.keys(details.qwenPhrases || {}).length ? { corpus: { phrases: details.qwenPhrases } } : {}) }, null, 2)
+            : details.prompt || '日志未记录完整提示词';
+          const text = [
+            '【AI 整理配置】', `模型：${details.generatorModel || '这份日志未记录'}`,
+            ...(details.contextTimeoutSeconds ? [`等待上限：${details.contextTimeoutSeconds} 秒`] : []),
+            ...(details.contextError ? [`失败原因：${details.contextError}`] : []), '',
+            '【开播整理结果】', generated?.background || '未生成背景', ...terms.map(([a,b]) => `${a} → ${b}`), '',
+            latest.provider === 'qwen' ? '【发送给千问的目标语言与术语；背景说明不发送】' : '【Gemini 本场提示词】', effective, '',
+            '【整理模型输入】', details.generatorRequest
+              ? `系统：\n${details.generatorRequest.system}\n\n页面资料与补充：\n${details.generatorRequest.user}`
+              : '这份日志没有记录整理模型的输入提示词。',
+          ].join('\n');
+          expanded = document.createElement('div');
+          expanded.className = 'live-log-detail';
+          const content = document.createElement('textarea');
+          content.readOnly = true;
+          content.rows = 8;
+          content.setAttribute('aria-label', '本场提示词与术语');
+          content.value = text;
+          const copy = document.createElement('button');
+          copy.className = 'small';
+          copy.textContent = '复制内容';
+          copy.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(text); logState('已复制本场提示词与术语'); }
+            catch (_) { logState('复制失败，请在文本框中全选复制'); }
+          });
+          expanded.append(content, copy);
+          info.appendChild(expanded);
+          view.textContent = '收起';
+        });
+        const exportOne = document.createElement('button');
+        exportOne.className = 'small';
+        exportOne.textContent = '导出';
+        exportOne.addEventListener('click', async () => {
+          try {
+            const latest = (await LT.LiveLog.list()).find((item) => item.key === entry.key) || entry;
+            download(`liuyi-live-log-${entry.startedAt}.json`, JSON.stringify(logExport([latest]), null, 2));
+            logState('已导出这一场日志');
+          } catch (err) { logState('导出失败：' + (err && err.message || err)); }
+        });
+        const del = document.createElement('button');
+        del.className = 'danger small';
+        del.textContent = '删除';
+        del.disabled = !entry.endedAt;
+        if (!entry.endedAt) del.title = '直播进行中，结束后可删除';
+        del.addEventListener('click', async () => {
+          if (!confirm('删除这一场直播日志？导出过的文件不受影响。')) return;
+          await LT.LiveLog.remove(entry.key);
+          refreshLogs();
+        });
+        row.append(info, view, exportOne, del);
+        box.appendChild(row);
+      }
+    }
+
+    $('refreshLiveLogs').addEventListener('click', refreshLogs);
+    $('exportAllLiveLogs').addEventListener('click', async () => {
+      try {
+        const logs = await LT.LiveLog.list();
+        if (!logs.length) return;
+        download(`${APP}-live-logs-${stamp()}.json`, JSON.stringify(logExport(logs), null, 2));
+        logState(`已导出 ${logs.length} 场日志`);
+      } catch (err) { logState('导出失败：' + (err && err.message || err)); }
+    });
+    $('clearLiveLogs').addEventListener('click', async () => {
+      const logs = (await LT.LiveLog.list()).filter((item) => item.endedAt);
+      if (!logs.length || !confirm(`清空 ${logs.length} 场已结束的直播日志？此操作无法撤销，字幕缓存和设置不受影响。`)) return;
+      await Promise.all(logs.map((item) => LT.LiveLog.remove(item.key)));
+      logState('日志已清空');
+      refreshLogs();
+    });
 
     $('exportSettings').addEventListener('click', () => {
       const includeKeys = $('includeKeys').checked;
@@ -97,11 +219,13 @@ globalThis.LT = globalThis.LT || {};
       const next = LT.Settings.normalize({});
       if (keep) {
         next.apiKeys = current.apiKeys;
+        next.qwenApiKey = current.qwenApiKey;
         next.providers = JSON.parse(JSON.stringify(current.providers));
         next.subsProviderId = current.subsProviderId;
       }
       await ctx.replace(LT.Settings.normalize(next));
     });
+    return { refreshLogs };
   }
 
   LT.OptionsUI.mountData = mountData;

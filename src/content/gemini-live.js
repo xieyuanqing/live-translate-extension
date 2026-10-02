@@ -55,6 +55,7 @@ globalThis.LT = globalThis.LT || {};
       this.reconnectDelayMs = 1000;
       this.failedHandshakes = 0;
       this.chunksSent = 0;
+      this.droppedChunks = 0;
 
       this.rotateTimer = null;
       this.watchdogTimer = null;
@@ -93,7 +94,7 @@ globalThis.LT = globalThis.LT || {};
     /** 采集侧调用：塞入一块 100ms/16k/mono 的 PCM。 */
     feedChunk(u8) {
       if (!this.running) return;
-      if (this.queue.length >= MAX_QUEUE) this.queue.shift();
+      if (this.queue.length >= MAX_QUEUE) { this.queue.shift(); this.droppedChunks++; }
       this.queue.push(u8);
       this.#drain();
     }
@@ -152,6 +153,7 @@ globalThis.LT = globalThis.LT || {};
       };
       ws.onclose = (e) => {
         if (gen !== this.generation || !this.running) return;
+        this.listener.onDiagnostic?.('connection_close', { code: e.code, reason: e.reason || '', generation: gen });
         if (!this.ready) {
           this.failedHandshakes++;
           if (this.failedHandshakes >= 2) {
@@ -244,9 +246,9 @@ globalThis.LT = globalThis.LT || {};
       const sc = o.serverContent;
       if (!sc) return;
       const input = sc.inputTranscription && sc.inputTranscription.text;
-      if (input) this.listener.onInputText(input);
+      if (input) this.listener.onInputText(input, { generation: gen });
       const output = sc.outputTranscription && sc.outputTranscription.text;
-      if (output) this.listener.onOutputText(output);
+      if (output) this.listener.onOutputText(output, { generation: gen });
       // modelTurn 里的翻译语音块直接忽略，不播放
     }
 
@@ -269,7 +271,12 @@ globalThis.LT = globalThis.LT || {};
         this.sentRing.push(chunk);
         if (this.sentRing.length > OVERLAP_CHUNKS) this.sentRing.shift();
         this.chunksSent++;
+        if (this.chunksSent % 150 === 0) this.#audioStats();
       }
+    }
+
+    #audioStats() {
+      this.listener.onDiagnostic?.('audio_sent', { sentChunks: this.chunksSent, queuedChunks: this.queue.length, droppedChunks: this.droppedChunks });
     }
 
     #buildSetupJson() {

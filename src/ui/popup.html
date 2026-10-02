@@ -8,11 +8,13 @@
   </head>
   <body>
     <header>
-      <span class="dot" id="dot"></span>
+      <span class="popup-brand" aria-hidden="true">译</span>
       <span class="title">流译</span>
+      <span class="dot" id="dot"></span>
       <span class="muted small" id="version"></span>
       <span class="grow"></span>
-      <button class="ghost small" id="openOptions">设置</button>
+      <button class="ghost small theme-toggle" id="toggleTheme" type="button" aria-label="切换为深色界面"><svg class="theme-moon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z" /></svg><svg class="theme-sun" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></svg></button>
+      <button class="ghost small" id="openOptions"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 3 1-1h4l1 1 1 3 3 1 2 3v4l-2 3-3 1-1 3-1 1h-4l-1-1-1-3-3-1-2-3v-4l2-3 3-1z" /><circle cx="12" cy="12" r="3" /></svg>设置</button>
     </header>
 
     <section id="body">
@@ -21,6 +23,17 @@
       <div class="video">
         <div id="videoTitle" class="video-title">未在 YouTube 视频页</div>
         <div id="videoMeta" class="muted small"></div>
+      </div>
+
+      <div class="quick">
+        <div class="field">
+          <label class="label" for="sourceLang">原文语言</label>
+          <select id="sourceLang"></select>
+        </div>
+        <div class="field">
+          <label class="label" for="targetLang">翻译成</label>
+          <select id="targetLang"></select>
+        </div>
       </div>
 
       <section id="vsBox" class="vs hidden">
@@ -45,7 +58,7 @@
       <div class="stats">
         <div class="stat connection"><span class="muted">状态</span><span id="stConn" aria-live="polite">—</span></div>
         <div class="stat"><span class="muted">方向</span><span id="stDir">—</span></div>
-        <div class="stat"><span class="muted">场景</span><span id="stScene">—</span></div>
+        <div class="stat"><span class="muted">本场配置</span><span id="stContext">—</span></div>
         <div class="stat"><span class="muted">已运行</span><span id="stTime">—</span></div>
       </div>
 
@@ -55,34 +68,42 @@
       </div>
       </div>
 
-      <div class="quick">
-        <div class="field">
-          <label class="label" for="sourceLang">听什么</label>
-          <select id="sourceLang"></select>
-        </div>
-        <div class="field">
-          <label class="label" for="targetLang">翻译成</label>
-          <select id="targetLang"></select>
-        </div>
-        <div class="field">
-          <label class="label" for="scene">场景</label>
-          <select id="scene"></select>
-        </div>
-      </div>
 
-      <div class="field temp">
-        <label class="label" for="tempContext">本场补充 · 可选</label>
-        <textarea id="tempContext" rows="2"
-          placeholder="补一句背景：今天玩的游戏、人名译法…"></textarea>
-        <div id="tempHint" class="muted small"></div>
-      </div>
+
+      <details id="contextBox" class="context-box hidden">
+        <summary>本场提示词与术语</summary>
+        <div class="field temp">
+          <label class="label" for="tempContext">本场补充 · 可选</label>
+          <textarea id="tempContext" rows="2"
+            placeholder="补充今天的游戏、人物背景或固定译法…"></textarea>
+          <div id="tempHint" class="muted small"></div>
+        </div>
+        <div class="context-actions">
+          <button id="previewContext" class="small">生成并预览</button>
+          <button id="copyContext" class="ghost small" disabled>复制内容</button>
+        </div>
+        <div id="contextState" class="muted small" role="status">可在开始翻译前生成，检查后再开始。</div>
+        <div id="contextContent" class="hidden">
+          <p id="contextEffect" class="muted small"></p>
+          <label class="label" for="generatedContext">整理结果：背景与候选术语</label>
+          <textarea id="generatedContext" rows="5" readonly></textarea>
+          <label id="effectivePromptLabel" class="label" for="effectivePrompt">本场翻译配置</label>
+          <textarea id="effectivePrompt" rows="7" readonly></textarea>
+          <details class="generator-input">
+            <summary>查看整理模型的输入提示词</summary>
+            <textarea id="generatorPrompt" rows="7" readonly aria-label="整理模型的输入提示词"></textarea>
+          </details>
+        </div>
+      </details>
 
       <div id="hint" class="muted small"></div>
       <button class="ghost small hidden" id="restart">应用当前设置并重新开始</button>
+
     </section>
 
     <script src="../common/constants.js"></script>
     <script src="../common/settings.js"></script>
+    <script src="theme.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

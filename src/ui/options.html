@@ -2,6 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="ui.css" />
     <link rel="stylesheet" href="../content/caption-layer.css" />
     <link rel="stylesheet" href="options.css" />
@@ -10,48 +11,54 @@
   <body>
     <div class="layout">
       <header class="top">
-        <h1>流译 · 设置</h1>
+        <span class="brand-mark" aria-hidden="true">译</span>
+        <div class="brand-copy">
+          <h1>流译</h1>
+          <p>YouTube 翻译 · 设置</p>
+        </div>
         <span class="grow"></span>
         <span id="saved" class="muted small">改动即时保存</span>
       </header>
 
       <nav class="nav" aria-label="设置分区">
-        <a href="#general">通用</a>
-        <a href="#live">实时翻译</a>
-        <a href="#video">整片字幕</a>
-        <a href="#models">文字模型</a>
-        <a href="#style">字幕外观</a>
-        <a href="#data">数据</a>
-        <a href="#about">关于</a>
+        <span class="nav-label">翻译设置</span>
+        <a href="#general"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h10M9 3v2M6 5c0 5 3 8 7 10M12 5c0 5-3 8-8 11M14 20l4-11 4 11M15.5 16h5" /></svg></span>语言与背景</a>
+        <a href="#live"><span class="nav-icon purple" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4" /></svg></span>实时翻译</a>
+        <a href="#video"><span class="nav-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m10 8 6 4-6 4z" /></svg></span>整片字幕</a>
+        <a href="#models"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="3" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3M10 10h4v4h-4z" /></svg></span>文字模型</a>
+        <span class="nav-label">偏好设置</span>
+        <a href="#style"><span class="nav-icon pink" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m10 14 9-11 2 2-9 11M10 14c-4-2-4 2-5 4l-2 2c6 1 9-1 7-6z" /></svg></span>字幕外观</a>
+        <a href="#data"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="14" rx="2" /><path d="M3 3h18v4H3zM9 11h6" /></svg></span>数据</a>
+        <a href="#about"><span class="nav-icon gray" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7v.1" /></svg></span>关于</a>
       </nav>
 
       <main class="pages">
+        <header class="page-heading">
+          <h2 id="pageTitle">语言与背景</h2>
+          <p id="pageDescription">设定翻译方向，补充常用的人名与背景。</p>
+        </header>
         <!-- ================= 通用 ================= -->
         <section class="page" data-page="general">
           <section class="card">
+            <h2>界面外观</h2>
+            <div class="field">
+              <label class="label" for="uiTheme">主题</label>
+              <select id="uiTheme"></select>
+              <p class="muted small">设置页与插件弹窗共用。深色使用柔和的中性灰。</p>
+            </div>
+          </section>
+          <section class="card">
             <h2>语言方向</h2>
-            <p class="muted small">两种模式共用。语言方向不进场景，随时单独调。</p>
+            <p class="muted small">实时翻译与整片字幕共用，随时单独调整。</p>
             <div class="two">
               <div class="field">
-                <span class="label">听什么（源语言）</span>
+                <label class="label" for="sourceLang">原文语言</label>
                 <select id="sourceLang"></select>
               </div>
               <div class="field">
-                <span class="label">翻译成（目标语言）</span>
+                <label class="label" for="targetLang">翻译成</label>
                 <select id="targetLang"></select>
               </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <h2>场景库</h2>
-            <p class="muted small">
-              场景 = 名称 + 提示词，是唯一的可复用配置层，实时翻译和整片字幕都用它。
-            </p>
-            <div id="scenes" class="scenes"></div>
-            <div class="row">
-              <button id="addScene">新增场景</button>
-              <button id="resetScenes" class="ghost">恢复默认模板</button>
             </div>
           </section>
 
@@ -59,7 +66,7 @@
             <h2>背景资料</h2>
             <label class="check">
               <input type="checkbox" id="useMetadata" />
-              <span>把视频标题、频道、标签和简介注入提示词<br /><span class="muted small">对人名、组合名、游戏名的翻译帮助最大</span></span>
+              <span>在直播和整片字幕中使用标题、频道、标签与简介<br /><span class="muted small">直播开启术语整理时先交给文字模型；整片字幕直接当背景资料</span></span>
             </label>
             <div class="field">
               <span class="label">简介截断长度：<b id="metadataLimitVal"></b> 字</span>
@@ -78,19 +85,44 @@
         <!-- ================= 实时翻译 ================= -->
         <section class="page" data-page="live">
           <section class="card">
-            <h2>Gemini Live 连接</h2>
+            <h2>直播翻译模型</h2>
             <div class="field">
-              <span class="label">Gemini API Key（多个用英文逗号分隔，每场会话随机用一个）</span>
-              <textarea id="apiKeys" rows="2" placeholder="AIza..., AIza..."></textarea>
-              <p class="muted small">
-                Key 明文存在浏览器本地存储里，只适合自己用的电脑。需要能访问
-                <code>generativelanguage.googleapis.com</code>，国内要给浏览器配代理。
-              </p>
+              <span class="label">使用的模型</span>
+              <select id="liveProvider"></select>
+              <p class="muted small">切换后重新开始直播翻译才生效；整片字幕仍独立使用「文字模型」配置。</p>
             </div>
-            <div class="field">
-              <span class="label">WebSocket Base URL</span>
-              <input type="text" id="baseUrl" placeholder="wss://generativelanguage.googleapis.com" />
-              <p class="muted small">用自建 wss 转发时改这里，留空恢复默认。</p>
+            <div id="geminiLiveFields">
+              <div class="field">
+                <span class="label">Gemini API Key（多个用英文逗号分隔，每场会话随机用一个）</span>
+                <textarea id="apiKeys" rows="2" placeholder="AIza..., AIza..."></textarea>
+                <p class="muted small">
+                  Key 明文存在浏览器本地存储里，只适合自己用的电脑。需要能访问
+                  <code>generativelanguage.googleapis.com</code>，国内要给浏览器配代理。
+                </p>
+              </div>
+              <div class="field">
+                <span class="label">Gemini WebSocket Base URL</span>
+                <input type="text" id="baseUrl" placeholder="wss://generativelanguage.googleapis.com" />
+                <p class="muted small">用自建 wss 转发时改这里，留空恢复默认。</p>
+              </div>
+            </div>
+            <div id="qwenLiveFields" class="hidden">
+              <div class="field">
+                <span class="label">千问业务空间域名</span>
+                <input type="text" id="qwenWorkspaceHost" placeholder="ws-xxxx.cn-beijing.maas.aliyuncs.com" />
+                <p class="muted small">只填域名，不填 wss://、路径或模型名。支持北京或新加坡百炼业务空间。</p>
+              </div>
+              <div class="field">
+                <span class="label">千问 API Key</span>
+                <input type="password" id="qwenApiKey" autocomplete="off" placeholder="sk-…" />
+                <p class="muted small">只保存在本机扩展设置中，不写进安装包。</p>
+              </div>
+              <div class="field">
+                <button id="grantQwenAccess" type="button">授权千问连接</button>
+                <p id="qwenPermissionState" class="muted small">正在检查浏览器权限…</p>
+                <p class="muted small">千问 WebSocket 必须带认证请求头。Chrome 会提示「所有网站」权限；本插件仅对当前 YouTube 标签页的一次千问连接握手使用临时规则，连上后立即清除。</p>
+                <p class="muted small">千问 3.8 自动识别源语言，只使用上面的目标语言；场景提示词、手写背景和生成的自由文本背景无法直接传给此模型，生成的术语映射可以传入。暂不支持繁体中文目标。</p>
+              </div>
             </div>
           </section>
 
@@ -107,6 +139,28 @@
           </section>
 
           <section class="card">
+            <h2>AI 整理</h2>
+            <label class="check">
+              <input type="checkbox" id="generateLiveContext" />
+              <span>开播前整理本场背景和术语</span>
+            </label>
+            <div class="field">
+              <label class="label" for="liveContextProviderId">AI 整理模型</label>
+              <div class="row">
+                <select id="liveContextProviderId"></select>
+                <a href="#models" class="small nowrap">管理模型配置</a>
+              </div>
+              <p class="muted small">与整片字幕翻译独立选择。可以为整理配置小模型，为字幕翻译配置更强的模型。</p>
+            </div>
+            <div class="field">
+              <label class="label" for="liveContextTimeoutSeconds">整理最长等待时间</label>
+              <select id="liveContextTimeoutSeconds"></select>
+              <p class="muted small">默认 60 秒，包含连接、模型等待和完整回答；手动「生成并预览」也使用此上限。</p>
+            </div>
+            <p class="muted small">每次开播额外请求一次，输入匹配时可复用已生成的预览。若选用 Gemini 文字接口，其空白 Key 只复用 Gemini Live Key。失败时 Gemini 按原标题和简介开始，千问不带自动生成的术语开始。</p>
+          </section>
+
+          <section class="card">
             <h2>高级</h2>
             <details>
               <summary class="muted small">默认值适合日常直播，遇到具体问题时再调整（点开）</summary>
@@ -114,7 +168,7 @@
                 <div class="field">
                   <span class="label">连接主动轮换：<b id="rotateSecondsVal"></b> 秒</span>
                   <input type="range" id="rotateSeconds" min="120" max="580" step="5" />
-                  <p class="muted small">服务端约 590 秒会断，必须提前换。</p>
+                  <p class="muted small">Gemini 服务端约 590 秒会断，必须提前换。千问试验模式固定每 120 秒轮换。</p>
                 </div>
                 <div class="field">
                   <span class="label">当前行静默转正：<b id="stabIdleMsVal"></b> ms</span>
@@ -127,14 +181,14 @@
               </div>
               <label class="check">
                 <input type="checkbox" id="echoTargetLanguage" />
-                <span>输入已经是目标语言时照样输出<br /><span class="muted small">关掉的话，说中文时模型会保持沉默</span></span>
+                <span>输入已经是目标语言时照样输出<br /><span class="muted small">仅 Gemini 生效；关掉的话，说中文时模型会保持沉默</span></span>
               </label>
             </details>
           </section>
 
-          <section class="card">
+          <section class="card" id="geminiPromptPreview">
             <h2>实时提示词预览</h2>
-            <p class="muted small">实时翻译开始时发给 Live 模型的 systemInstruction（元数据部分用示例占位）。</p>
+            <p class="muted small">Gemini 使用基础翻译规则和本场背景；不再叠加通用、VTuber 等场景模板。下方是基础预览，实际整理结果在弹窗「本场提示词与术语」查看。千问 3.8 只接收整理出的术语映射。</p>
             <pre id="preview" class="preview"></pre>
           </section>
         </section>
@@ -147,7 +201,7 @@
               普通视频和已结束的回放读取 YouTube 自带的字幕轨，用文字模型整片翻译，结果缓存在本机，再看同一视频不再花额度。
             </p>
             <div class="field">
-              <span class="label">使用的接口配置</span>
+              <label class="label" for="subsProviderId">字幕翻译模型</label>
               <div class="row">
                 <select id="subsProviderId"></select>
                 <a href="#models" class="small nowrap">管理接口配置</a>
@@ -167,6 +221,19 @@
           </section>
 
           <section class="card">
+            <h2>高级：整片字幕翻译偏好</h2>
+            <details>
+              <summary class="muted small">管理可复用的场景提示词（点开）</summary>
+              <p class="muted small">已有场景保留在这里，仅用于整片字幕。实时翻译使用本场背景与术语整理；语言方向仍独立保存。</p>
+              <div id="scenes" class="scenes"></div>
+              <div class="row">
+                <button id="addScene">新增翻译偏好</button>
+                <button id="resetScenes" class="ghost">恢复默认模板</button>
+              </div>
+            </details>
+          </section>
+
+          <section class="card">
             <h2>整片提示词预览</h2>
             <p class="muted small">整片字幕翻译发给文字模型的系统提示词（按自动字幕示例）。</p>
             <pre id="previewSubs" class="preview"></pre>
@@ -178,8 +245,21 @@
           <section class="card">
             <h2>文字模型</h2>
             <p class="muted small">
-              整片字幕用的文字模型。可以保存多套接口配置，标着「整片字幕使用」的那套生效；直播实时翻译仍用 Live 模型。
+              AI 整理与整片字幕翻译分别选模型、独立保存。可复制一套接口配置后填写不同的模型名，分别用于整理和翻译；直播音频仍发送给「实时翻译」里选定的 Live 模型。
             </p>
+            <p class="muted small">两者均支持 OpenAI 兼容格式（chat/completions），新增配置默认使用此格式。填写接口地址、API Key 和该服务实际支持的模型名即可；已有配置保留原来的接口类型。</p>
+            <div class="two model-roles">
+              <div class="field">
+                <label class="label" for="modelContextProviderId">AI 整理模型</label>
+                <select id="modelContextProviderId"></select>
+                <p class="muted small">整理标题、简介、背景与术语，可选较快的小模型。</p>
+              </div>
+              <div class="field">
+                <label class="label" for="modelSubsProviderId">字幕翻译模型</label>
+                <select id="modelSubsProviderId"></select>
+                <p class="muted small">翻译 YouTube 字幕轨，可选质量更高的模型。</p>
+              </div>
+            </div>
             <div id="providers" class="providers"></div>
             <div class="row">
               <button id="addProvider">新增接口配置</button>
@@ -262,6 +342,24 @@
         <!-- ================= 数据 ================= -->
         <section class="page" data-page="data">
           <section class="card">
+            <h2>直播诊断日志</h2>
+            <div class="field">
+              <span class="label">日志级别（下一场直播起生效）</span>
+              <select id="debugLogLevel"></select>
+            </div>
+            <p class="muted small">基础日志只记录连接、耗时和音频块数量；详细调试还记录标题、简介、背景、实际提示词、原文转写与译文片段。日志保存在本机扩展存储，不保存原始音频，并会遮盖已配置的 API Key；分享导出文件前仍请检查私人内容。进行中的日志最多落后约 2 秒。每场最多保留 3000 条事件，已结束日志最多保留最近 20 场。</p>
+            <div id="liveLogList" class="cache-list"></div>
+            <div class="row">
+              <span id="liveLogTotal" class="muted small"></span>
+              <span class="grow"></span>
+              <button id="refreshLiveLogs" class="ghost small">刷新</button>
+              <button id="exportAllLiveLogs" class="small">导出全部日志</button>
+              <button id="clearLiveLogs" class="danger small">清空已结束日志</button>
+            </div>
+            <p id="liveLogState" class="muted small"></p>
+          </section>
+
+          <section class="card">
             <h2>字幕缓存</h2>
             <p class="muted small">
               整片字幕的原文和译文保存在浏览器本地存储里，不会自动过期；这里可以按视频删除或全部清空。
@@ -326,7 +424,9 @@
 
     <script src="../common/constants.js"></script>
     <script src="../common/settings.js"></script>
+    <script src="theme.js"></script>
     <script src="../common/prompt.js"></script>
+    <script src="../common/live-log.js"></script>
     <script src="../subs/cache.js"></script>
     <script src="../subs/net.js"></script>
     <script src="../subs/text-model.js"></script>

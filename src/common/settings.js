@@ -27,13 +27,21 @@ globalThis.LT = globalThis.LT || {};
     };
   }
 
-  /** 只做范围收敛，不做结构迁移——个人自用工具，字段变了直接恢复默认。 */
+  /** 收敛范围并补齐新增字段，保留现有接口类型和各用途的选择。 */
   function normalize(raw) {
     const s = Object.assign({}, LT.DEFAULTS, raw || {});
+    if (!['system', 'light', 'dark'].includes(s.uiTheme)) s.uiTheme = LT.DEFAULTS.uiTheme;
     for (const k of RETIRED) delete s[k];
     if (!Array.isArray(s.scenes) || s.scenes.length === 0) s.scenes = LT.DEFAULT_SCENES;
     if (!s.scenes.some((x) => x.id === s.sceneId)) s.sceneId = s.scenes[0].id;
     if (!s.baseUrl) s.baseUrl = LT.DEFAULT_BASE_URL;
+    if (!LT.LIVE_PROVIDERS.some((p) => p.code === s.liveProvider)) s.liveProvider = 'gemini';
+    s.qwenWorkspaceHost = String(s.qwenWorkspaceHost || '').trim().replace(/^wss?:\/\//i, '').replace(/\/$/, '');
+    s.qwenApiKey = String(s.qwenApiKey || '').trim();
+    s.generateLiveContext = s.generateLiveContext !== false;
+    s.liveContextTimeoutSeconds = [30, 60, 120].includes(Number(s.liveContextTimeoutSeconds))
+      ? Number(s.liveContextTimeoutSeconds) : 60;
+    if (!LT.LOG_LEVELS.some((level) => level.code === s.debugLogLevel)) s.debugLogLevel = 'off';
     s.rotateSeconds = clamp(Number(s.rotateSeconds) || 505, 120, 580);
     s.stabIdleMs = clamp(Number(s.stabIdleMs) || 2500, 1000, 6000);
     s.stabMaxChars = clamp(Number(s.stabMaxChars) || 42, 20, 80);
@@ -58,6 +66,9 @@ globalThis.LT = globalThis.LT || {};
       .filter((p) => !ids.has(p.id) && ids.add(p.id));
     if (s.providers.length === 0) s.providers = LT.DEFAULTS.providers.map((p) => normalizeProvider(p));
     if (!s.providers.some((p) => p.id === s.subsProviderId)) s.subsProviderId = s.providers[0].id;
+    // 旧设置首次沿用原选择，保存后两种用途各自保管 id，切换字幕模型不再连带切换整理模型。
+    if (!s.liveContextProviderId) s.liveContextProviderId = s.subsProviderId;
+    if (!s.providers.some((p) => p.id === s.liveContextProviderId)) s.liveContextProviderId = s.providers[0].id;
     return s;
   }
 
@@ -100,7 +111,7 @@ globalThis.LT = globalThis.LT || {};
 
     /** 新建一套接口配置（带新 id），patch 里的字段覆盖默认值。 */
     newProvider(patch) {
-      return normalizeProvider(Object.assign({}, patch || {}, { id: newProviderId() }));
+      return normalizeProvider(Object.assign({ apiType: 'openai' }, patch || {}, { id: newProviderId() }));
     },
 
     /** 整片字幕选用的接口配置；传 id 可取指定的一套，找不到就退到第一套。 */

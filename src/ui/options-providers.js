@@ -55,7 +55,7 @@ globalThis.LT = globalThis.LT || {};
   }
 
   /**
-   * @param {{box: HTMLElement, settings: () => object, save: () => void, select: (id: string) => void}} ctx
+   * @param {{box: HTMLElement, settings: () => object, save: () => void, select: (id: string, field?: string) => void}} ctx
    */
   function mountProviders(ctx) {
     const box = ctx.box;
@@ -63,12 +63,14 @@ globalThis.LT = globalThis.LT || {};
     function card(provider) {
       const settings = ctx.settings();
       const active = provider.id === settings.subsProviderId;
-      const root = el('div', active ? 'provider active' : 'provider');
+      const contextActive = provider.id === settings.liveContextProviderId;
+      const root = el('div', active || contextActive ? 'provider active' : 'provider');
 
       // ---- 标题行：名称、选用标记、复制、删除 ----
       const head = el('div', 'head');
       const name = el('input');
       name.type = 'text';
+      name.setAttribute('aria-label', '接口配置名称');
       name.placeholder = typeLabel(provider.apiType);
       name.value = provider.name;
       name.addEventListener('input', () => {
@@ -76,16 +78,6 @@ globalThis.LT = globalThis.LT || {};
         ctx.save();
       });
       head.appendChild(name);
-      if (active) {
-        head.appendChild(el('span', 'badge', '整片字幕使用'));
-      } else {
-        const use = el('button', 'small', '整片字幕改用这套');
-        use.addEventListener('click', () => {
-          ctx.select(provider.id);
-          render();
-        });
-        head.appendChild(use);
-      }
       const copy = el('button', 'ghost small', '复制');
       copy.addEventListener('click', () => {
         const s = ctx.settings();
@@ -101,11 +93,25 @@ globalThis.LT = globalThis.LT || {};
         if (!confirm(`删除接口配置「${displayName(provider)}」？`)) return;
         s.providers = s.providers.filter((p) => p !== provider);
         if (s.subsProviderId === provider.id) s.subsProviderId = s.providers[0].id;
+        if (s.liveContextProviderId === provider.id) s.liveContextProviderId = s.providers[0].id;
         ctx.save();
         render();
       });
       head.append(copy, del);
       root.appendChild(head);
+      const roles = el('div', 'row provider-roles');
+      for (const [field, selected, label] of [
+        ['liveContextProviderId', contextActive, 'AI 整理'],
+        ['subsProviderId', active, '整片字幕'],
+      ]) {
+        if (selected) roles.appendChild(el('span', 'badge', `${label}使用`));
+        else {
+          const use = el('button', 'small', `${label}改用这套`);
+          use.addEventListener('click', () => { ctx.select(provider.id, field); render(); });
+          roles.appendChild(use);
+        }
+      }
+      root.appendChild(roles);
 
       // ---- 类型与模型名 ----
       const two = el('div', 'two');
@@ -236,7 +242,7 @@ globalThis.LT = globalThis.LT || {};
         base.placeholder = LT.TEXT_DEFAULT_BASE[provider.apiType];
         baseHint.textContent =
           provider.apiType === 'openai'
-            ? '填到 /v1 为止，例如 https://api.openai.com/v1 或第三方兼容服务的地址。'
+            ? '填写接口基础地址，通常以 /v1 结尾，例如 https://api.openai.com/v1；程序会追加 /chat/completions。第三方服务按其提供的基础地址填写。'
             : '自建反代填到域名为止，程序会自动拼 /v1beta/models/… 路径。';
         keyLabel.textContent = provider.apiType === 'gemini' ? 'API Key（留空则复用实时翻译的 Live Key）' : 'API Key';
         name.placeholder = typeLabel(provider.apiType);

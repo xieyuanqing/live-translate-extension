@@ -140,7 +140,9 @@ globalThis.LT = globalThis.LT || {};
       return await route({ ...req, method, signal: controller.signal });
     } catch (err) {
       if (timedOut) {
-        throw new Error(method === 'GET' ? '请求超时，接口没有响应' : '文字模型请求超时，请重试或降低并发请求数');
+        const timeoutError = new Error(method === 'GET' ? '请求超时，接口没有响应' : '文字模型请求超时，请重试或降低并发请求数');
+        timeoutError.name = 'TimeoutError';
+        throw timeoutError;
       }
       throw err;
     } finally {

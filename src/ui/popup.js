@@ -8,6 +8,10 @@
   let timer = null;
   let busy = false;
   let settingsSave = Promise.resolve();
+  let contextReview = null;
+  let contextRevision = -1;
+  let contextTabVideoId = '';
+  let contextLoading = false;
 
   const CONN_LABEL = {
     '': '未开始',
@@ -32,7 +36,7 @@
   async function send(type, payload) {
     if (tabId == null) return null;
     try {
-      return await chrome.tabs.sendMessage(tabId, { type, payload });
+      return await chrome.tabs.sendMessage(tabId, { type, payload }, { frameId: 0 });
     } catch (_) {
       return null; // 内容脚本还没注入（比如刚装完扩展没刷新页面）
     }
@@ -128,7 +132,7 @@
   function renderStatus() {
     const running = !!status && status.phase !== 'idle';
     const liveFocus = running || !!status?.isLive;
-    $('liveDetails').classList.toggle('hidden', !liveFocus);
+    $('liveDetails').classList.toggle('hidden', !running);
     $('toggle').classList.toggle('primary', liveFocus);
     $('toggle').classList.toggle('ghost', !liveFocus);
     $('toggle').classList.toggle('secondary', !liveFocus);
@@ -151,11 +155,19 @@
     $('reloadPage').classList.toggle('hidden', !!status || tabId == null);
     $('restart').classList.toggle('hidden', !running);
     $('restart').disabled = busy;
+    $('contextBox').classList.toggle('hidden', !status?.onWatchPage);
+    $('previewContext').disabled = busy || running || !!status?.previewBusy;
+    if (status?.previewBusy) $('contextState').textContent = '正在整理背景与术语…';
 
     $('stConn').textContent = status?.error || CONN_LABEL[status?.conn || ''] || status.conn;
-    $('stConn').style.color = status?.error ? '#ffb4ab' : '';
+    $('stConn').style.color = status?.error ? 'var(--err)' : '';
     $('stDir').textContent = status?.direction || `${LT.sourceLabel(settings.sourceLang)} → ${LT.targetLabel(settings.targetLang)}`;
-    $('stScene').textContent = status?.sceneLabel || LT.Settings.scene(settings).label;
+    const qwen = (status?.liveProvider || settings.liveProvider) === 'qwen';
+    $('stContext').textContent = status?.contextStatus === 'generated'
+      ? `${qwen ? '词表' : 'AI 背景'} · ${status.generatedTerms || 0} 组术语`
+      : status?.phase === 'starting' ? '准备中…'
+      : status?.contextStatus === 'error' ? '整理失败'
+      : qwen ? '无自动词表' : '基础规则';
     $('stTime').textContent = fmtTime(status?.elapsedMs);
     $('level').style.width = `${running ? status.level : 0}%`;
 
@@ -190,11 +202,14 @@
     const temp = status.tempContext || '';
     if (document.activeElement !== ta && ta.value !== temp) ta.value = temp;
     ta.disabled = !status.onWatchPage;
-    $('tempHint').textContent = running
-      ? '修改后点下方「应用当前设置」即可生效。'
-      : '开始翻译时生效；换视频或刷新后清空。';
+    $('tempHint').textContent = qwen
+      ? !settings.generateLiveContext || !settings.useMetadata
+        ? '千问只接收词表；需启用 AI 整理和标题简介，才能将补充用于词表整理。'
+        : running ? '修改后重新开始，会重新整理词表。' : '生成预览或开始时参与词表整理；换视频或刷新后清空。'
+      : running ? '修改后点下方「应用当前设置」即可生效。' : '生成预览或开始时生效；换视频或刷新后清空。';
 
-    if (LT.Settings.keyList(settings).length === 0 && !LT.Settings.provider(settings).apiKey) {
+    const liveKey = settings.liveProvider === 'qwen' ? settings.qwenApiKey : LT.Settings.keyList(settings).length;
+    if (!liveKey && !LT.Settings.provider(settings).apiKey) {
       const cached = !!status.video?.hasCache && !status.isLive;
       banner(cached ? '缓存可直接观看；翻译新内容需配置 API Key。' : '还没有填 API Key，先去设置里填一个再开始。', cached ? 'info' : '');
     } else if (running && status.phase === 'running') {
@@ -213,14 +228,78 @@
   async function refresh() {
     status = await send(LT.MSG.QUERY_STATUS);
     renderStatus();
+    if ($('contextBox').open) await refreshContext();
   }
+
+  function renderContext() {
+    const r = contextReview;
+    $('contextContent').classList.toggle('hidden', !r);
+    $('copyContext').disabled = !r;
+    if (!r) {
+      $('contextState').textContent = status?.previewBusy ? '正在整理背景与术语…' : '可在开始翻译前生成，检查后再开始。生成会调用单独选定的 AI 整理模型。';
+      return;
+    }
+    const labels = { generated: '已生成背景和术语', disabled: '开播整理已关闭', no_metadata: '没有启用或读到页面资料', unavailable: '文字模型配置不完整，未生成', error: '整理失败，使用基础配置' };
+    $('contextState').textContent = (r.phase === 'preview' ? '开播预览 · 尚未开始翻译 · ' : '本场启动时冻结 · ') +
+      (labels[r.contextStatus] || r.contextStatus) + (r.generatorModel ? ` · 整理模型：${r.generatorModel}` : '') +
+      (r.contextTimeoutSeconds ? ` · 等待上限 ${r.contextTimeoutSeconds} 秒` : '') + (r.contextError ? `：${r.contextError}` : '');
+    if (r.stale) $('contextState').textContent = '输入已变化，这份预览已失效；请重新生成，或开始时重新整理。';
+    $('contextEffect').textContent = r.provider === 'qwen'
+      ? '千问只接收下方术语映射和目标语言；背景说明、场景提示词不发送给千问。'
+      : '下方是本场 Gemini 使用的完整提示词。运行中修改设置需重新开始才生效。';
+    const terms = Object.entries(r.generated?.phrases || {});
+    $('generatedContext').value = [r.generated?.background || '没有生成背景', '', '候选术语：', ...terms.map(([a, b]) => `${a} → ${b}`), ...(terms.length ? [] : ['无'])].join('\n');
+    $('effectivePromptLabel').textContent = r.provider === 'qwen' ? '发送给千问的目标语言与术语配置' : '发送给 Gemini 的完整提示词';
+    $('effectivePrompt').value = r.provider === 'qwen' ? JSON.stringify({ type: 'session.update', session: { output_modalities: ['text'], translation: r.translation } }, null, 2) : r.prompt;
+    $('generatorPrompt').value = r.generatorRequest ? `【系统提示词】\n${r.generatorRequest.system}\n\n【页面资料与补充】\n${r.generatorRequest.user}` : '本次未启用开播整理，没有整理模型输入。';
+  }
+
+  async function refreshContext(force = false) {
+    if (!status || contextLoading) return;
+    if (!force && contextRevision === status.liveReviewRevision && contextTabVideoId === status.videoId) return;
+    contextLoading = true;
+    const videoId = status.videoId;
+    const revision = status.liveReviewRevision;
+    try {
+      const result = await send(LT.MSG.QUERY_LIVE_CONTEXT);
+      if (videoId !== status?.videoId) return;
+      contextReview = result?.review || null;
+      contextRevision = revision;
+      contextTabVideoId = videoId;
+      renderContext();
+    } finally { contextLoading = false; }
+  }
+
+  $('contextBox').addEventListener('toggle', () => { if ($('contextBox').open) refreshContext(true); });
+  $('previewContext').addEventListener('click', async () => {
+    if (busy) return;
+    busy = true;
+    renderStatus();
+    $('contextState').textContent = '正在生成开播预览…';
+    try {
+      await settingsSave;
+      await send(LT.MSG.SET_TEMP_CONTEXT, $('tempContext').value);
+      const result = await send(LT.MSG.PREVIEW_LIVE_CONTEXT);
+      if (!result?.ok) throw new Error(result?.error || '页面没有响应，请刷新 YouTube 后重试');
+      await refresh();
+      await refreshContext(true);
+    } catch (err) { $('contextState').textContent = err.message || '生成失败'; }
+    finally { busy = false; renderStatus(); }
+  });
+  $('copyContext').addEventListener('click', async () => {
+    if (!contextReview) return;
+    try {
+      await navigator.clipboard.writeText([$('contextState').textContent, $('contextEffect').textContent,
+        $('generatedContext').value, $('effectivePrompt').value, $('generatorPrompt').value].join('\n\n'));
+      $('contextState').textContent = '已复制背景、术语、整理输入和本场翻译配置。';
+    } catch (_) { $('contextState').textContent = '复制失败，请在文本框中全选复制。'; }
+  });
 
   async function init() {
     $('version').textContent = chrome.runtime.getManifest().version;
     settings = await LT.Settings.load();
     fillSelect($('sourceLang'), LT.SOURCE_LANGS, settings.sourceLang);
     fillSelect($('targetLang'), LT.TARGET_LANGS, settings.targetLang);
-    fillSelect($('scene'), settings.scenes, settings.sceneId);
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.id && /^https:\/\/www\.youtube\.com\//.test(tab.url || '')) {
@@ -291,11 +370,21 @@
   );
 
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  $('toggleTheme').addEventListener('click', () => {
+    const uiTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    const themeRevision = LT.UITheme.apply(uiTheme);
+    settingsSave = settingsSave.then(async () => {
+      settings = await LT.Settings.save({ uiTheme });
+      LT.UITheme.settle(themeRevision, settings.uiTheme);
+    }).catch(() => {
+      LT.UITheme.settle(themeRevision, settings.uiTheme);
+      banner('主题保存失败，请重新打开弹窗后重试。', '');
+    });
+  });
 
   for (const [id, key] of [
     ['sourceLang', 'sourceLang'],
     ['targetLang', 'targetLang'],
-    ['scene', 'sceneId'],
   ]) {
     $(id).addEventListener('change', (e) => {
       const value = e.target.value;
@@ -310,6 +399,16 @@
   // 输入直接送到页面内存，避免立即关掉弹窗时防抖任务来不及执行。
   $('tempContext').addEventListener('input', (e) => {
     send(LT.MSG.SET_TEMP_CONTEXT, e.target.value);
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.settings) return;
+    settingsSave.then(async () => {
+      settings = await LT.Settings.load();
+      $('sourceLang').value = settings.sourceLang;
+      $('targetLang').value = settings.targetLang;
+      renderStatus();
+    }).catch(() => {});
   });
 
   window.addEventListener('unload', () => clearInterval(timer));

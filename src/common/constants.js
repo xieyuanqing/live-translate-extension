@@ -17,6 +17,17 @@ globalThis.LT = globalThis.LT || {};
   LT.WS_PATH =
     '/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
   LT.DEFAULT_BASE_URL = 'wss://generativelanguage.googleapis.com';
+  LT.QWEN_MODEL = 'qwen3.8-livetranslate-flash-realtime';
+  LT.QWEN_AUTH_PORT = 'lt-qwen-auth';
+  LT.LIVE_PROVIDERS = [
+    { code: 'gemini', label: 'Gemini 3.5 Live Translate' },
+    { code: 'qwen', label: '千问 3.8 LiveTranslate' },
+  ];
+  LT.LOG_LEVELS = [
+    { code: 'off', label: '关闭' },
+    { code: 'basic', label: '基础日志（状态与耗时）' },
+    { code: 'detailed', label: '详细调试（含原文、译文和提示词）' },
+  ];
 
   // ---------- 语言 ----------
   LT.SOURCE_LANGS = [
@@ -100,8 +111,16 @@ globalThis.LT = globalThis.LT || {};
   // ---------- 默认设置 ----------
   // 轮换 / 断句参数沿用已验证的默认值，变更时补真实运行验证。
   LT.DEFAULTS = {
+    uiTheme: 'system', // 设置页和弹窗共用，跟随系统或手动选择深浅色
     apiKeys: '', // 英文逗号分隔多个，会话开始时随机选一个
     baseUrl: LT.DEFAULT_BASE_URL,
+    liveProvider: 'gemini',
+    qwenWorkspaceHost: '', // 只存工作空间域名，不存用户专属地址到源码
+    qwenApiKey: '',
+    generateLiveContext: true, // 开播前用选中的文字模型整理短背景和术语
+    liveContextProviderId: '', // AI 整理独立选用；首次读取旧设置时保留原来的接口选择
+    liveContextTimeoutSeconds: 60, // 包含连接、模型等待和收完整个回答
+    debugLogLevel: 'off', // 显式开启后才把直播诊断记录写入本机扩展存储
 
     sourceLang: 'ja',
     targetLang: 'zh',
@@ -109,7 +128,7 @@ globalThis.LT = globalThis.LT || {};
     scenes: LT.DEFAULT_SCENES,
 
     autoStartLive: true, // 打开直播页自动开始
-    useMetadata: true, // 把标题/简介塞进 systemInstruction
+    useMetadata: true, // 实时提示词或开播术语整理、整片字幕的标题/简介资料
     metadataLimit: 1200, // 简介截断长度
     manualContext: '', // 用户手填的长期背景（人名表等）
 
@@ -132,11 +151,11 @@ globalThis.LT = globalThis.LT || {};
     captionSourceScale: 0.78, // 原文字号相对译文的比例
     pauseOnAd: true,
 
-    // ---- 整片字幕（视频 / 回放）用的文字模型：可保存多套接口配置，按 subsProviderId 选用 ----
+    // ---- 文字模型：AI 整理与整片字幕分别按 liveContextProviderId / subsProviderId 选用 ----
     // 每套：{ id, name, apiType: gemini | openai, baseUrl（空用官方地址）, apiKey（Gemini 空则复用 Live Key）,
     //        model（用账号实际可用的名字，不预填）, concurrency（并发请求数）, requestPath: auto | direct | relay }
     providers: [
-      { id: 'p-default', name: '', apiType: 'gemini', baseUrl: '', apiKey: '', model: '', concurrency: 3, requestPath: 'auto' },
+      { id: 'p-default', name: '', apiType: 'openai', baseUrl: '', apiKey: '', model: '', concurrency: 3, requestPath: 'auto' },
     ],
     subsProviderId: 'p-default',
     autoShowCached: true, // 打开已翻译过的视频时自动显示缓存字幕
@@ -167,8 +186,8 @@ globalThis.LT = globalThis.LT || {};
 
   // ---------- 整片字幕：文字模型与分块参数 ----------
   LT.TEXT_API_TYPES = [
-    { code: 'gemini', label: 'Gemini generateContent' },
     { code: 'openai', label: 'OpenAI 兼容 chat/completions' },
+    { code: 'gemini', label: 'Gemini generateContent' },
   ];
   LT.TEXT_DEFAULT_BASE = {
     gemini: 'https://generativelanguage.googleapis.com',
@@ -201,6 +220,8 @@ globalThis.LT = globalThis.LT || {};
     TOGGLE: 'lt:toggle',
     SETTINGS_CHANGED: 'lt:settings-changed',
     SET_TEMP_CONTEXT: 'lt:set-temp-context',
+    QUERY_LIVE_CONTEXT: 'lt:query-live-context',
+    PREVIEW_LIVE_CONTEXT: 'lt:preview-live-context',
     // 整片字幕
     VS_START: 'lt:vs-start', // payload: { force?: boolean }
     VS_CANCEL: 'lt:vs-cancel',

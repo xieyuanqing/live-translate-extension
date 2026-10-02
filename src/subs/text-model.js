@@ -133,14 +133,14 @@ globalThis.LT = globalThis.LT || {};
   }
 
   /**
-   * @param {{config:object, system:string, user:string, signal?:AbortSignal}} args
+   * @param {{config:object, system:string, user:string, signal?:AbortSignal, timeoutMs?:number}} args
    * @returns {Promise<{text:string, finishReason:string, via:string}>}
    */
-  async function translate({ config, system, user, signal }) {
+  async function translate({ config, system, user, signal, timeoutMs }) {
     checkConfig(config);
     if (!config.model) throw new RequestError('未填写文字模型名，请在扩展设置里填写', { fatal: true });
     const req = buildRequest(config, system, user);
-    const res = await LT.Net.post({ ...req, signal, path: config.path });
+    const res = await LT.Net.post({ ...req, signal, timeoutMs, path: config.path });
     if (!res.ok) {
       const retryAfterMs = res.status === 429 ? parseRetryAfter(res.retryAfter, res.text) : 0;
       const fatal = res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404;

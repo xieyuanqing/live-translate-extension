@@ -2,17 +2,19 @@
   "manifest_version": 3,
   "name": "流译 · YouTube 直播实时翻译与整片字幕",
   "short_name": "流译",
-  "description": "直播：抓取播放器音频经 Gemini Live 实时翻译。视频与回放：读取 YouTube 字幕轨，用文字模型整片翻译并缓存。字幕直接叠在播放器里。",
+  "description": "直播：抓取播放器音频经 Gemini 或千问实时翻译。视频与回放：读取 YouTube 字幕轨，用文字模型整片翻译并缓存。字幕直接叠在播放器里。",
   "version": "0.2.0",
   "permissions": [
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://generativelanguage.googleapis.com/*"
   ],
   "optional_host_permissions": [
+    "<all_urls>",
     "https://*/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
@@ -39,26 +41,36 @@
   "options_page": "src/ui/options.html",
   "commands": {
     "toggle-session": {
-      "suggested_key": { "default": "Alt+T" },
+      "suggested_key": {
+        "default": "Alt+T"
+      },
       "description": "开始 / 停止当前标签页的实时翻译"
     }
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
       "world": "MAIN",
       "run_at": "document_start",
-      "js": ["src/main-world/page-bridge.js"]
+      "js": [
+        "src/main-world/page-bridge.js"
+      ]
     },
     {
-      "matches": ["https://www.youtube.com/*"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
       "run_at": "document_idle",
       "js": [
         "src/common/constants.js",
         "src/common/settings.js",
         "src/common/prompt.js",
+        "src/common/live-log.js",
         "src/audio/pcm16k.js",
         "src/content/gemini-live.js",
+        "src/content/qwen-live.js",
         "src/content/stabilizer.js",
         "src/content/audio-tap.js",
         "src/content/caption-layer.js",
@@ -69,17 +81,24 @@
         "src/subs/scheduler.js",
         "src/subs/net.js",
         "src/subs/text-model.js",
+        "src/common/live-context.js",
         "src/subs/cache.js",
         "src/content/video-subs.js",
         "src/content/main.js"
       ],
-      "css": ["src/content/caption-layer.css"]
+      "css": [
+        "src/content/caption-layer.css"
+      ]
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/audio/pcm16k.js"],
-      "matches": ["https://www.youtube.com/*"]
+      "resources": [
+        "src/audio/pcm16k.js"
+      ],
+      "matches": [
+        "https://www.youtube.com/*"
+      ]
     }
   ]
 }

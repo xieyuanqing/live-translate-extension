@@ -14,6 +14,8 @@ const ROOT = path.join(__dirname, '..');
 require(path.join(ROOT, 'src/common/constants.js'));
 require(path.join(ROOT, 'src/common/settings.js'));
 require(path.join(ROOT, 'src/common/prompt.js'));
+require(path.join(ROOT, 'src/common/live-context.js'));
+require(path.join(ROOT, 'src/content/qwen-live.js'));
 require(path.join(ROOT, 'src/audio/pcm16k.js'));
 require(path.join(ROOT, 'src/content/stabilizer.js'));
 require(path.join(ROOT, 'src/subs/json3.js'));
@@ -181,7 +183,8 @@ console.log('\n[3] 提示词组合');
   });
   check('无资料时不出现围栏', !bare.includes('<session_context>'));
   check('包含翻译方向', bare.includes('日语 → 中文'));
-  check('包含场景说明', bare.includes(scene.instruction));
+  check('直播不再叠加场景模板', !bare.includes(scene.instruction) && !bare.includes('【场景：'));
+  check('直播保留固定翻译规则', bare.includes('只输出目标语言译文') && bare.includes('疑问和否定'));
 
   const withMeta = LT.Prompt.build({
     scene,
@@ -227,6 +230,15 @@ console.log('\n[3] 提示词组合');
     tempContext: '只有临时补充',
   });
   check('只有临时补充也有围栏', tempOnly.includes('<session_context>') && tempOnly.includes('只有临时补充'));
+
+  const generated = LT.LiveContext.parse('{"background":"APEX 直播，正在进行游戏对战","terms":[{"source":"レイス","target":"恶灵"},{"source":"R-301","target":"R-301"}]}');
+  check('生成背景解析并限制为资料', generated.phrases['レイス'] === '恶灵' &&
+    LT.Prompt.build({ scene, sourceLang: 'ja', targetLang: 'zh', metadataText: '', manualContext: '', generatedContext: LT.LiveContext.asPromptContext(generated) }).includes('レイス＝恶灵'));
+  check('千问地址不含凭据', LT.QwenLiveUrl('ws-test.cn-beijing.maas.aliyuncs.com') ===
+    'wss://ws-test.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime');
+  let invalidQwenHost = false;
+  try { LT.QwenLiveUrl('evil.example.com'); } catch (_) { invalidQwenHost = true; }
+  check('千问只接受百炼业务空间域名', invalidQwenHost);
 
   const subsExtra = LT.Prompt.buildSubs({
     scene, sourceLang: 'ja', targetLang: 'zh', isAsr: true, metadataText: '', manualContext: '', extraInstruction: ' 术语按简中服 ',
@@ -512,8 +524,8 @@ console.log('\n[9] 缓存指纹、字幕提示词与设置');
   );
   const empty = LT.Settings.normalize({ providers: [] });
   check(
-    '没有接口配置时补一套默认 Gemini',
-    empty.providers.length === 1 && empty.providers[0].apiType === 'gemini' && empty.subsProviderId === empty.providers[0].id
+    '没有接口配置时补一套默认 OpenAI 兼容配置',
+    empty.providers.length === 1 && empty.providers[0].apiType === 'openai' && empty.subsProviderId === empty.providers[0].id
   );
   const fresh = LT.Settings.newProvider({ apiType: 'openai', id: 'ignored' });
   check('新建配置带新 id', fresh.id !== 'ignored' && fresh.apiType === 'openai' && fresh.concurrency === 3);

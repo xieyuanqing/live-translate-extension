@@ -1,175 +1,146 @@
+/* 设置页与弹窗共用的控件与主题；深色采用中性灰背景和低饱和度操作色。 */
 :root {
+  color-scheme: light;
+  --bg: #f2f2f7;
+  --card: #ffffff;
+  --surface: #f7f8fa;
+  --line: #e5e5ea;
+  --fg: #1c1c1e;
+  --muted: #63636b;
+  --accent: #0066cc;
+  --accent-soft: #edf5ff;
+  --ok: #248a3d;
+  --warn: #9a6700;
+  --err: #c9342b;
+  --hover: #eef0f4;
+  --pressed: #e5e8ed;
+  --primary: #0066cc;
+  --primary-hover: #005ab5;
+  --input-line: #dcdce2;
+  --placeholder: #74747d;
+  --danger-bg: #fff2f1;
+  --danger-line: #f3d1cd;
+  --danger-hover: #ffe6e3;
+  --info-bg: #edf5ff;
+  --info-line: #d4e6fb;
+  --info-fg: #245b96;
+  --header-bg: #ffffffef;
+  --secondary-fg: #3a3a3c;
+  --divider: #efeff3;
+  --toggle-track: #d1d1d6;
+  --segment-bg: #f1f1f5;
+  --selected-shadow: #1c1c1e1f;
+  --code-bg: #f0f0f5;
+  --soft-card: #fafbfc;
+  --role-bg: #f5f9ff;
+  --role-line: #d9e8fa;
+  --preview-bg: #f8f9fb;
+  --selected-border: #b9d6f7;
+}
+:root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0f0f0f;
-  --card: #1b1b1b;
-  --line: #2f2f2f;
-  --fg: #f1f1f1;
-  --muted: #aaa;
-  --accent: #3ea6ff;
-  --ok: #4caf50;
-  --warn: #ffb300;
-  --err: #ef5350;
+  --bg: #262626;
+  --card: #303030;
+  --surface: #383838;
+  --line: #484848;
+  --fg: #ececec;
+  --muted: #b5b5b5;
+  --accent: #8ab4f8;
+  --accent-soft: #343e4c;
+  --ok: #9dccae;
+  --warn: #dec18b;
+  --err: #f1a29a;
+  --hover: #424242;
+  --pressed: #4a4a4a;
+  --primary: #4b77b4;
+  --primary-hover: #416aa2;
+  --input-line: #555555;
+  --placeholder: #aaaaaa;
+  --danger-bg: #3f3030;
+  --danger-line: #644642;
+  --danger-hover: #4b3533;
+  --info-bg: #303b49;
+  --info-line: #485b72;
+  --info-fg: #b4ccec;
+  --header-bg: #303030ef;
+  --secondary-fg: #d8d8d8;
+  --divider: #434343;
+  --toggle-track: #626262;
+  --segment-bg: #383838;
+  --selected-shadow: #00000033;
+  --code-bg: #3c3c3c;
+  --soft-card: #353535;
+  --role-bg: #353535;
+  --role-line: #505a67;
+  --preview-bg: #353535;
+  --selected-border: #617c9e;
 }
-
-* {
-  box-sizing: border-box;
+/* 设置读取前先按系统给出底色，避免深色系统下闪过白底。 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { color-scheme: dark; --bg: #262626; --fg: #ececec; }
 }
-
+* { box-sizing: border-box; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: Roboto, 'Microsoft YaHei', system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
-
-h1,
-h2,
-h3 {
-  margin: 0;
-  font-weight: 600;
-}
-
-a {
-  color: var(--accent);
-}
-
+h1, h2, h3 { margin: 0; font-weight: 600; }
+a { color: var(--accent); text-underline-offset: 3px; }
 button {
-  font: inherit;
-  color: inherit;
-  background: #2a2a2a;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 12px;
-  cursor: pointer;
+  font: inherit; font-weight: 500; color: var(--fg); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 9px; padding: 7px 12px; cursor: pointer;
 }
-
-button:hover {
-  background: #343434;
+button:hover { background: var(--hover); }
+button:active { background: var(--pressed); }
+button:disabled { opacity: .45; cursor: default; filter: none; }
+:is(button, input, select, textarea, summary, a):focus-visible { outline: 3px solid #007aff66; outline-offset: 3px; }
+button.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+button.danger { background: var(--danger-bg); border-color: var(--danger-line); color: var(--err); }
+button.danger:hover { background: var(--danger-hover); }
+button.ghost { background: transparent; color: var(--accent); }
+button.ghost:hover { background: var(--accent-soft); }
+input[type='text'], input[type='number'], input[type='password'], select, textarea {
+  width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--input-line);
+  border-radius: 9px; padding: 8px 10px; font: inherit;
 }
-
-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-  filter: none;
+input::placeholder, textarea::placeholder { color: var(--placeholder); }
+select { min-height: 36px; }
+textarea { resize: vertical; min-height: 60px; line-height: 1.65; }
+input[type='range'] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+input[type='checkbox'] { accent-color: var(--accent); }
+label { display: block; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > * { min-width: 0; }
+.grow { flex: 1; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.field { margin-bottom: 14px; }
+.field > .label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.check { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; cursor: pointer; }
+.check input { margin-top: 3px; flex: 0 0 auto; }
+/* 保留原生 checkbox 的键盘与表单行为，只把长期功能开关画成滑块。 */
+.check:not(.inline) input[type='checkbox'], .text-check input[type='checkbox'] {
+  appearance: none; position: relative; flex: 0 0 44px; width: 44px; height: 26px; margin: 0;
+  background: var(--toggle-track); border: 0; border-radius: 15px; cursor: pointer;
+  transition: background .15s ease;
 }
-
-:is(button, input, select, textarea):focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.check:not(.inline) input[type='checkbox']::before, .text-check input[type='checkbox']::before {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #00000026; transition: transform .15s ease;
 }
-
-button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #05233b;
-  font-weight: 600;
-}
-
-button.primary:hover {
-  filter: brightness(1.08);
-}
-
-button.danger {
-  background: #3a1f1f;
-  border-color: #5c2b2b;
-  color: #ffb4ab;
-}
-
-button.ghost {
-  background: transparent;
-}
-
-input[type='text'],
-input[type='number'],
-input[type='password'],
-select,
-textarea {
-  width: 100%;
-  background: #121212;
-  color: var(--fg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font: inherit;
-}
-
-textarea {
-  resize: vertical;
-  min-height: 60px;
-}
-
-input[type='range'] {
-  width: 100%;
-}
-
-label {
-  display: block;
-}
-
-.row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.row > * {
-  min-width: 0;
-}
-
-.grow {
-  flex: 1;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.small {
-  font-size: 12px;
-}
-
-.field {
-  margin-bottom: 12px;
-}
-
-.field > .label {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 10px;
-  cursor: pointer;
-}
-
-.check input {
-  margin-top: 3px;
-  flex: 0 0 auto;
-}
-
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #777;
-  flex: 0 0 auto;
-}
-
-.dot.ok {
-  background: var(--ok);
-}
-
-.dot.warn {
-  background: var(--warn);
-}
-
-.dot.err {
-  background: var(--err);
+.check:not(.inline) input[type='checkbox']:checked, .text-check input[type='checkbox']:checked { background: #34c759; }
+.check:not(.inline) input[type='checkbox']:checked::before, .text-check input[type='checkbox']:checked::before { transform: translateX(18px); }
+.check:not(.inline) input[type='checkbox']:disabled, .text-check input[type='checkbox']:disabled { opacity: .45; cursor: default; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #8e8e93; flex: 0 0 auto; }
+.dot.ok { background: #34c759; }
+.dot.warn { background: #ff9500; }
+.dot.err { background: #ff3b30; }
+@media (prefers-reduced-motion: reduce) {
+  .check input[type='checkbox'], .check input[type='checkbox']::before,
+  .text-check input[type='checkbox'], .text-check input[type='checkbox']::before { transition: none; }
 }

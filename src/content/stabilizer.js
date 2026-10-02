@@ -22,6 +22,9 @@ globalThis.LT = globalThis.LT || {};
       this.idleCommitMs = opts.idleCommitMs;
       this.maxCurrentChars = opts.maxCurrentChars;
       this.onRender = opts.onRender;
+      // 千问的 delta 是明确的增量；真实重复应保留，不能套用 Gemini 的文本猜测去重。
+      this.detectOverlap = opts.detectOverlap !== false;
+      this.suppressRepeats = opts.suppressRepeats !== false;
       this.current = '';
       this.lastCommitted = '';
       this.idleTimer = null;
@@ -58,7 +61,7 @@ globalThis.LT = globalThis.LT || {};
     /** 若新碎片的开头和缓冲区结尾重叠（>=2 字），只追加不重叠的部分。 */
     #appendWithOverlap(frag) {
       const tail = this.current;
-      let k = Math.min(tail.length, frag.length);
+      let k = this.detectOverlap ? Math.min(tail.length, frag.length) : 0;
       while (k > 0) {
         if (tail.slice(tail.length - k) === frag.slice(0, k)) break;
         k--;
@@ -95,7 +98,7 @@ globalThis.LT = globalThis.LT || {};
         const sentence = raw.trim();
         if (!sentence) continue;
         // 连续重复：和上一句相同，或整句包含在上一句里 → 丢弃
-        if (sentence === this.lastCommitted || this.lastCommitted.includes(sentence)) continue;
+        if (this.suppressRepeats && (sentence === this.lastCommitted || this.lastCommitted.includes(sentence))) continue;
         this.lastCommitted = sentence;
         committed.push(sentence);
       }

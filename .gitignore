@@ -11,3 +11,6 @@ Thumbs.db
 
 # Claude Code 在仓库内创建的 worktree，不能提交
 .claude/worktrees/
+
+# 导出的直播日志可能包含私人背景和文本，仅留在本地
+liuyi-live-log-*.json

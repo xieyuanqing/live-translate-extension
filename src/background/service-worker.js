@@ -6,6 +6,88 @@
 importScripts('/src/common/constants.js', '/src/common/settings.js');
 
 const LT = globalThis.LT;
+const QWEN_RULE_MIN = 1000000000;
+const QWEN_RULE_MAX = 1500000000;
+const qwenRules = new Set();
+
+function validQwenUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'wss:' &&
+      /^[a-z0-9-]+\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/.test(url.hostname) &&
+      url.pathname === '/api-ws/v1/realtime' &&
+      url.searchParams.size === 1 &&
+      url.searchParams.get('model') === LT.QWEN_MODEL;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function clearStaleQwenRules() {
+  const rules = await chrome.declarativeNetRequest.getSessionRules();
+  const stale = rules.map((r) => r.id)
+    .filter((id) => id >= QWEN_RULE_MIN && id < QWEN_RULE_MAX && !qwenRules.has(id));
+  if (stale.length) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: stale });
+}
+
+// 上次工作进程异常退出时，握手用的临时认证规则不能留在本次浏览器会话里。
+const qwenCleanupOnStart = clearStaleQwenRules().catch(() => {});
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== LT.QWEN_AUTH_PORT) return;
+  let ruleId = 0;
+  let closed = false;
+  const reply = (msg) => { try { port.postMessage(msg); } catch (_) { /* 对端已断开 */ } };
+  const release = async () => {
+    const id = ruleId;
+    ruleId = 0;
+    if (!id) return;
+    qwenRules.delete(id);
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] });
+  };
+  port.onDisconnect.addListener(() => {
+    closed = true;
+    release().catch(() => {});
+  });
+  port.onMessage.addListener(async (msg) => {
+    if (!msg || msg.type !== 'prepare' || ruleId || closed) return;
+    const tab = port.sender && port.sender.tab;
+    if (!tab || !/^https:\/\/www\.youtube\.com\//.test(tab.url || '') ||
+        !validQwenUrl(msg.url) || !/^sk-[^\s]{8,}$/.test(String(msg.key || ''))) {
+      reply({ type: 'error', message: '千问连接配置无效' });
+      return;
+    }
+    try {
+      const granted = await chrome.permissions.contains({ origins: ['<all_urls>'] });
+      if (!granted) throw new Error('请先在扩展设置里授权千问 WebSocket 连接');
+      await qwenCleanupOnStart;
+      await clearStaleQwenRules();
+      if (closed) return;
+      let id;
+      do { id = QWEN_RULE_MIN + Math.floor(Math.random() * (QWEN_RULE_MAX - QWEN_RULE_MIN)); }
+      while (qwenRules.has(id));
+      qwenRules.add(id);
+      try { await chrome.declarativeNetRequest.updateSessionRules({ addRules: [{
+        id,
+        priority: 1,
+        action: { type: 'modifyHeaders', requestHeaders: [
+          { header: 'Authorization', operation: 'set', value: `Bearer ${msg.key}` },
+        ] },
+        condition: {
+          urlFilter: `|${msg.url}|`,
+          resourceTypes: ['websocket'],
+          tabIds: [tab.id],
+        },
+      }] }); }
+      catch (err) { qwenRules.delete(id); throw err; }
+      ruleId = id;
+      if (closed) await release();
+      else reply({ type: 'prepared' });
+    } catch (err) {
+      reply({ type: 'error', message: err && err.message ? err.message : '无法设置千问连接认证' });
+    }
+  });
+});
 
 const BADGE = {
   ready: { text: 'ON', color: '#2e7d32' },
@@ -34,8 +116,7 @@ function paintBadge(tabId, status) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   // 只补齐缺失字段，不覆盖用户已有设置
-  const current = await LT.Settings.load();
-  await LT.Settings.save(current);
+  await LT.Settings.save({});
 });
 
 chrome.runtime.onMessage.addListener((msg, sender) => {

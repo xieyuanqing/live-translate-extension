@@ -17,7 +17,7 @@ const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve()
 async function sessionHarness() {
   const video = { paused: false, muted: false, volume: 1 };
   const player = {};
-  const clients = [], taps = [], statuses = [], subStarts = [];
+  const clients = [], taps = [], statuses = [], subStarts = [], logs = [];
   let messageHandler, navigate;
   let videoId = 'video-A';
   const ctx = vm.createContext({ console: quiet, Date, setInterval() {},
@@ -29,7 +29,20 @@ async function sessionHarness() {
   });
   load(ctx, 'src/common/constants.js');
   load(ctx, 'src/common/prompt.js');
+  load(ctx, 'src/common/live-context.js');
+  load(ctx, 'src/common/live-log.js');
   const LT = ctx.LT;
+  LT.LiveLog = { ...LT.LiveLog, open(opts) {
+    if (opts.level === 'off') return null;
+    const log = { opts, events: [], detailsCalls: [], reason: '',
+      event(type, value) { this.events.push({ type, value }); },
+      audioChunk() {},
+      details(value) { this.detailsCalls.push(value); },
+      finish(reason) { this.reason = reason; return Promise.resolve(); },
+    };
+    logs.push(log);
+    return log;
+  } };
   let settings = { ...LT.DEFAULTS, autoStartLive: false, useMetadata: false, apiKeys: 'test-only' };
   LT.Settings = {
     load: async () => settings,
@@ -52,6 +65,11 @@ async function sessionHarness() {
     start() { this.starts++; this.running = true; } stop() { this.running = false; }
     feedChunk() {}
   };
+  LT.QwenLiveClient = class {
+    constructor(opts) { this.opts = opts; this.starts = 0; this.running = false; clients.push(this); }
+    start() { this.starts++; this.running = true; } stop() { this.running = false; }
+    feedChunk() {}
+  };
   LT.AudioTap = class {
     constructor() { this.detached = false; taps.push(this); }
     async attach() { return 'worklet'; } detach() { this.detached = true; } setGate() {}
@@ -63,9 +81,9 @@ async function sessionHarness() {
   };
   load(ctx, 'src/content/main.js');
   await flush();
-  return { LT, video, clients, taps, statuses, subStarts,
+  return { LT, video, clients, taps, statuses, subStarts, logs,
     setSettings: patch => { settings = { ...settings, ...patch }; },
-    message: (type, payload) => messageHandler({ type, payload }, {}, () => {}),
+    message: (type, payload, respond = () => {}) => messageHandler({ type, payload }, {}, respond),
     navigate: id => { videoId = id; navigate(); },
   };
 }
@@ -138,12 +156,149 @@ test('运行中修改配置不改变本场连接凭据和方向', async () => {
   assert.equal(h.clients[0].opts.targetLang, 'zh');
 });
 
+test('千问选项使用独立凭据并冻结本场连接', async () => {
+  const h = await sessionHarness();
+  h.setSettings({ liveProvider: 'qwen', qwenApiKey: 'sk-test-only', qwenWorkspaceHost: 'ws-test.cn-beijing.maas.aliyuncs.com' });
+  await h.LT.debug.start('test');
+  assert.equal(h.clients.length, 1);
+  assert.equal(h.clients[0].opts.apiKey, 'sk-test-only');
+  assert.equal(h.clients[0].opts.workspaceHost, 'ws-test.cn-beijing.maas.aliyuncs.com');
+  h.setSettings({ qwenApiKey: 'sk-new-test', qwenWorkspaceHost: 'ws-new.cn-beijing.maas.aliyuncs.com' });
+  h.message(h.LT.MSG.SETTINGS_CHANGED);
+  await flush();
+  assert.equal(h.clients[0].opts.apiKey, 'sk-test-only');
+  assert.equal(h.clients[0].opts.workspaceHost, 'ws-test.cn-beijing.maas.aliyuncs.com');
+});
+
+test('开播背景整理进入 Gemini 提示词，千问只收到术语映射', async () => {
+  for (const liveProvider of ['gemini', 'qwen']) {
+    const h = await sessionHarness();
+    h.setSettings({ liveProvider, useMetadata: true, qwenApiKey: 'sk-test-only', qwenWorkspaceHost: 'ws-test.cn-beijing.maas.aliyuncs.com' });
+    h.LT.YouTube.waitForMeta = async () => ({ videoId: 'video-B', title: 'APEX 排位直播', description: '游戏直播' });
+    h.navigate('video-B');
+    await flush();
+    h.LT.LiveContext.generate = async () => ({ background: 'APEX 排位赛', phrases: { アーマー: '护甲' } });
+    await h.LT.debug.start('test');
+    assert.equal(h.clients.length, 1);
+    if (liveProvider === 'gemini') {
+      assert.match(h.clients[0].opts.prompt, /APEX 排位赛/);
+      assert.match(h.clients[0].opts.prompt, /アーマー＝护甲/);
+    } else {
+      assert.deepEqual(JSON.parse(JSON.stringify(h.clients[0].opts.phrases)), { アーマー: '护甲' });
+    }
+  }
+});
+
+test('停止时作废仍在等待的开播背景整理', async () => {
+  const h = await sessionHarness();
+  const wait = deferred();
+  h.setSettings({ useMetadata: true });
+  h.LT.YouTube.waitForMeta = async () => ({ videoId: 'video-B', title: 'APEX 排位直播' });
+  h.navigate('video-B');
+  await flush();
+  h.LT.LiveContext.generate = () => wait.promise;
+  const pending = h.LT.debug.start('test');
+  await flush();
+  await h.LT.debug.stop();
+  wait.resolve({ background: '晚到的背景', phrases: {} });
+  await pending;
+  assert.equal(h.clients.length, 0);
+  assert.equal(h.LT.debug.session.phase, 'idle');
+});
+
+test('详细调试在仅译文显示模式下仍记录原文与译文，停止时封存', async () => {
+  const h = await sessionHarness();
+  h.setSettings({ debugLogLevel: 'detailed', captionDisplayMode: 'translationOnly' });
+  await h.LT.debug.start('test');
+  assert.equal(h.logs.length, 1);
+  h.clients[0].opts.listener.onInputText('こんにちは');
+  h.clients[0].opts.listener.onOutputText('你好');
+  await h.LT.debug.stop();
+  assert.ok(h.logs[0].events.some((e) => e.type === 'source_text' && e.value.text === 'こんにちは'));
+  assert.ok(h.logs[0].events.some((e) => e.type === 'translation_fragment' && e.value.text === '你好'));
+  assert.equal(h.logs[0].reason, 'user');
+});
+
+test('开播前可预览且不开音频，开始复用相同结果，显示与实际配置一致', async () => {
+  for (const liveProvider of ['gemini', 'qwen']) {
+    const h = await sessionHarness();
+    h.setSettings({ liveProvider, useMetadata: true, qwenApiKey: 'sk-test-only', qwenWorkspaceHost: 'ws-test.cn-beijing.maas.aliyuncs.com' });
+    h.LT.YouTube.waitForMeta = async () => ({ videoId: 'video-B', author: 'YuNi - official channel -', title: '生日直播' });
+    h.message(h.LT.MSG.SETTINGS_CHANGED);
+    await flush();
+    h.navigate('video-B'); await flush();
+    let requests = 0;
+    h.LT.LiveContext.generate = async () => { requests++; return { background: '生日直播', phrases: { ゆに: 'YuNi' } }; };
+    const preview = await h.LT.debug.previewLiveContext();
+    assert.equal(preview.ok, true);
+    assert.equal(h.clients.length, 0);
+    assert.equal(h.taps.length, 0);
+    assert.equal(preview.review.phase, 'preview');
+    assert.equal(preview.review.generated.phrases.YuNi, 'YuNi');
+    h.setSettings({ commentTranslationStyle: 'quote', chatTranslationStyle: 'highlight', chatTranslationColor: '#123456' });
+    h.message(h.LT.MSG.SETTINGS_CHANGED);
+    await flush();
+    await h.LT.debug.start('test');
+    assert.equal(requests, 1);
+    let response;
+    h.message(h.LT.MSG.QUERY_LIVE_CONTEXT, undefined, value => { response = value; });
+    assert.equal(response.review.phase, 'session');
+    h.setSettings({ commentTranslationStyle: 'box', chatTranslationStyle: 'wavy' });
+    h.message(h.LT.MSG.SETTINGS_CHANGED);
+    await flush();
+    assert.equal(h.clients.length, 1);
+    assert.equal(requests, 1);
+    if (liveProvider === 'gemini') assert.equal(response.review.prompt, h.clients[0].opts.prompt);
+    else {
+      assert.equal(response.review.prompt, '');
+      assert.deepEqual(JSON.parse(JSON.stringify(response.review.translation.corpus.phrases)), JSON.parse(JSON.stringify(h.clients[0].opts.phrases)));
+    }
+  }
+});
+
+test('临时补充变化使预览失效，开始使用新输入重新整理', async () => {
+  const h = await sessionHarness(); h.setSettings({ useMetadata: true });
+  h.LT.YouTube.waitForMeta = async () => ({ videoId: 'video-B', title: '直播' });
+  h.navigate('video-B'); await flush();
+  let requests = 0;
+  h.LT.LiveContext.generate = async (_,__,notes) => { requests++; return { background: notes || '旧背景', phrases: {} }; };
+  await h.LT.debug.previewLiveContext();
+  h.message(h.LT.MSG.SET_TEMP_CONTEXT, '新背景');
+  let response;
+  h.message(h.LT.MSG.QUERY_LIVE_CONTEXT, undefined, x => { response = x; });
+  assert.equal(response.review.stale, true);
+  await h.LT.debug.start('test');
+  assert.equal(requests, 2);
+  assert.match(h.clients[0].opts.prompt, /新背景/);
+});
+
+test('预览输出遮盖配置 Key，换视频后旧生成结果不能写回', async () => {
+  const h = await sessionHarness();
+  h.setSettings({ useMetadata: true, manualContext: '临时调试 key=test-only' });
+  h.LT.YouTube.waitForMeta = async ({ videoId }) => ({ videoId, title: '直播' });
+  h.navigate('video-B'); await flush();
+  h.LT.LiveContext.generate = async () => ({ background: 'test-only', phrases: {} });
+  const result = await h.LT.debug.previewLiveContext();
+  assert.ok(!JSON.stringify(result).includes('test-only'));
+  assert.match(JSON.stringify(result), /API_KEY/);
+  const wait = deferred(); h.LT.LiveContext.generate = () => wait.promise;
+  const pending = h.LT.debug.previewLiveContext(); await flush();
+  h.navigate('video-C');
+  wait.resolve({ background: '旧视频晚到的结果', phrases: {} });
+  await assert.rejects(pending, /取消/);
+  let response;
+  h.message(h.LT.MSG.QUERY_LIVE_CONTEXT, undefined, x => { response = x; });
+  assert.equal(response.review, null);
+});
+
 test('没有 API Key 时角标收到最终空闲状态', async () => {
   const h = await sessionHarness();
-  h.setSettings({ apiKeys: '' });
+  h.setSettings({ apiKeys: '', debugLogLevel: 'basic' });
   await h.LT.debug.start('test');
   assert.equal(h.statuses.at(-1).phase, 'idle');
   assert.match(h.statuses.at(-1).error, /API Key/);
+  assert.equal(h.logs[0].reason, 'missing_key');
+  assert.ok(h.logs[0].events.some((e) => e.type === 'connection' && /API Key/.test(e.value.state)));
 });
 
 test('读取整片字幕设置时取消，旧启动不会复活', async () => {

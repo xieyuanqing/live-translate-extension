@@ -8,15 +8,43 @@
 
   let settings = LT.DEFAULTS;
   let saveTimer = null;
+  let saveQueue = Promise.resolve();
+  let pendingThemeRevision = null;
 
   const PAGES = ['general', 'live', 'video', 'models', 'style', 'data', 'about'];
+  const PAGE_INFO = {
+    general: ['语言与背景', '设定翻译方向，补充常用的人名与背景。'],
+    live: ['实时翻译', '选择直播模型，设置开播前的背景与术语整理。'],
+    video: ['整片字幕', '读取视频字幕，翻译后保存在本机，方便下次观看。'],
+    models: ['文字模型', '整理用轻量模型，字幕用更强的模型，分别选择。'],
+    style: ['字幕外观', '调整双语显示、字体与颜色，直接查看预览效果。'],
+    data: ['数据管理', '查看诊断日志、管理字幕缓存，备份你的设置。'],
+    about: ['关于流译', '版本信息、快捷键与诊断说明。'],
+  };
   const PAGE_KEY = 'lt-options-page';
-  const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'manualContext', 'subsExtraInstruction'];
+  const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'qwenWorkspaceHost', 'qwenApiKey', 'manualContext', 'subsExtraInstruction'];
   const SELECT_OPTIONS = {
+    uiTheme: [
+      { code: 'system', label: '跟随系统（默认）' },
+      { code: 'light', label: '浅色' },
+      { code: 'dark', label: '深色' },
+    ],
+    liveProvider: LT.LIVE_PROVIDERS,
+    debugLogLevel: LT.LOG_LEVELS,
     sourceLang: LT.SOURCE_LANGS,
     targetLang: LT.TARGET_LANGS,
+    liveContextTimeoutSeconds: [
+      { code: '30', label: '30 秒' },
+      { code: '60', label: '60 秒（默认）' },
+      { code: '120', label: '120 秒' },
+    ],
   };
-  const CHECK_FIELDS = ['autoStartLive', 'pauseOnAd', 'useMetadata', 'echoTargetLanguage', 'autoShowCached'];
+  const PROVIDER_SELECTS = {
+    liveContextProviderId: 'liveContextProviderId', modelContextProviderId: 'liveContextProviderId',
+    subsProviderId: 'subsProviderId', modelSubsProviderId: 'subsProviderId',
+  };
+  const CHECK_FIELDS = ['autoStartLive', 'pauseOnAd', 'useMetadata', 'echoTargetLanguage', 'generateLiveContext',
+    'autoShowCached'];
   const RANGE_FIELDS = ['metadataLimit', 'rotateSeconds', 'stabIdleMs', 'stabMaxChars'];
 
   // ---------- 保存 ----------
@@ -49,16 +77,55 @@
 
   function queueSave(patch) {
     Object.assign(settings, patch);
+    if (Object.hasOwn(patch, 'uiTheme')) pendingThemeRevision = LT.UITheme.apply(settings.uiTheme);
+    renderLiveProvider();
     renderPreview();
     renderProviderSelect();
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-      // 不要用返回值覆盖 settings：场景与接口配置卡片的事件闭包持有当前这些对象引用，
-      // 换成存储里反序列化出来的新对象后，下一次输入就会写丢。
-      await LT.Settings.save(settings);
-      flashSaved();
-      notifyTabs();
+    saveTimer = setTimeout(() => {
+      const snapshot = { ...settings };
+      const themeRevision = pendingThemeRevision;
+      saveQueue = saveQueue.then(async () => {
+        // 不要用返回值覆盖 settings：场景与接口配置卡片的事件闭包持有当前这些对象引用，
+        // 换成存储里反序列化出来的新对象后，下一次输入就会写丢。
+        try {
+          const saved = await LT.Settings.save(snapshot);
+          if (themeRevision !== null && pendingThemeRevision === themeRevision) {
+            pendingThemeRevision = null;
+            LT.UITheme.settle(themeRevision, saved.uiTheme);
+          }
+          flashSaved();
+          notifyTabs();
+        } catch (_) {
+          if (themeRevision !== null && pendingThemeRevision === themeRevision) {
+            const saved = await LT.Settings.load().catch(() => LT.DEFAULTS);
+            if (pendingThemeRevision === themeRevision) {
+              pendingThemeRevision = null;
+              settings.uiTheme = saved.uiTheme;
+              $('uiTheme').value = saved.uiTheme;
+              LT.UITheme.settle(themeRevision, saved.uiTheme);
+            }
+          }
+          $('saved').textContent = '保存失败，请重试';
+        }
+      });
     }, 250);
+  }
+
+  function renderLiveProvider() {
+    $('geminiLiveFields').classList.toggle('hidden', settings.liveProvider === 'qwen');
+    $('qwenLiveFields').classList.toggle('hidden', settings.liveProvider !== 'qwen');
+    $('geminiPromptPreview').classList.toggle('hidden', settings.liveProvider === 'qwen');
+  }
+
+  async function refreshQwenPermission() {
+    try {
+      const allowed = await chrome.permissions.contains({ origins: ['<all_urls>'] });
+      $('qwenPermissionState').textContent = allowed ? '已授权，可连接千问。' : '尚未授权，千问连接不能启动。';
+      $('grantQwenAccess').disabled = allowed;
+    } catch (_) {
+      $('qwenPermissionState').textContent = '此预览环境无法检查 Chrome 权限。';
+    }
   }
 
   /** 导入 / 恢复默认：整体写入后重载页面，所有卡片重新建立。 */
@@ -82,6 +149,8 @@
       if (!PAGES.includes(page)) page = 'general';
     }
     for (const el of document.querySelectorAll('.page')) el.classList.toggle('active', el.dataset.page === page);
+    $('pageTitle').textContent = PAGE_INFO[page][0];
+    $('pageDescription').textContent = PAGE_INFO[page][1];
     for (const a of document.querySelectorAll('.nav a')) {
       if (a.getAttribute('href') === `#${page}`) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
@@ -92,7 +161,7 @@
       /* 无痕模式等 */
     }
     if (page === 'style') style.refresh(); // 隐藏时容器宽度为 0，显示后重算字号
-    if (page === 'data') renderCache();
+    if (page === 'data') { renderCache(); dataUI.refreshLogs(); }
   }
 
   // ---------- 子模块 ----------
@@ -101,28 +170,31 @@
     box: $('providers'),
     settings: () => settings,
     save: () => queueSave({}),
-    select: (id) => queueSave({ subsProviderId: id }),
+    select: (id, field = 'subsProviderId') => queueSave({ [field]: id }),
   });
   const style = LT.OptionsUI.mountStyle({ $, settings: () => settings, save: queueSave });
-  LT.OptionsUI.mountData({
+  const dataUI = LT.OptionsUI.mountData({
     $,
     settings: () => settings,
     replace: replaceSettings,
     version: chrome.runtime.getManifest().version,
   });
 
-  // ---------- 整片字幕：选用的接口配置 ----------
+  // ---------- AI 整理与字幕翻译：分别选用接口配置 ----------
 
   function renderProviderSelect() {
-    const el = $('subsProviderId');
-    el.replaceChildren();
-    for (const p of settings.providers) {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = p.name || (LT.TEXT_API_TYPES.find((t) => t.code === p.apiType) || {}).label || p.apiType;
-      el.appendChild(opt);
+    for (const [id, field] of Object.entries(PROVIDER_SELECTS)) {
+      const el = $(id);
+      el.replaceChildren();
+      for (const p of settings.providers) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const name = p.name || (LT.TEXT_API_TYPES.find((t) => t.code === p.apiType) || {}).label || p.apiType;
+        opt.textContent = `${name} · ${p.model || '未填写模型名'}`;
+        el.appendChild(opt);
+      }
+      el.value = settings[field];
     }
-    el.value = settings.subsProviderId;
   }
 
   // ---------- 场景库 ----------
@@ -154,11 +226,11 @@
       if (isDefault) {
         const badge = document.createElement('span');
         badge.className = 'badge';
-        badge.textContent = '默认';
+        badge.textContent = '整片字幕使用';
         head.appendChild(badge);
       } else {
         const use = document.createElement('button');
-        use.textContent = '设为默认';
+        use.textContent = '整片字幕改用这项';
         use.addEventListener('click', () => {
           queueSave({ sceneId: scene.id });
           renderScenes();
@@ -209,7 +281,6 @@
       ? LT.Prompt.formatMetadata(sampleMeta, settings.metadataLimit)
       : '';
     $('preview').textContent = LT.Prompt.build({
-      scene,
       sourceLang: settings.sourceLang,
       targetLang: settings.targetLang,
       metadataText,
@@ -322,9 +393,18 @@
       el.value = settings[id];
       el.addEventListener('change', () => queueSave({ [id]: el.value }));
     }
+    renderLiveProvider();
+    $('grantQwenAccess').addEventListener('click', async () => {
+      try {
+        await chrome.permissions.request({ origins: ['<all_urls>'] });
+      } catch (_) { /* 用户拒绝授权，下面按实际状态显示 */ }
+      refreshQwenPermission();
+    });
+    refreshQwenPermission();
 
     for (const id of CHECK_FIELDS) {
       const el = $(id);
+      el.setAttribute('role', 'switch');
       el.checked = !!settings[id];
       el.addEventListener('change', () => queueSave({ [id]: el.checked }));
     }
@@ -342,10 +422,12 @@
     }
 
     renderProviderSelect();
-    $('subsProviderId').addEventListener('change', () => {
-      queueSave({ subsProviderId: $('subsProviderId').value });
-      providers.render();
-    });
+    for (const [id, field] of Object.entries(PROVIDER_SELECTS)) {
+      $(id).addEventListener('change', () => {
+        queueSave({ [field]: $(id).value });
+        providers.render();
+      });
+    }
 
     $('addProvider').addEventListener('click', () => {
       settings.providers.push(LT.Settings.newProvider({}));
@@ -395,4 +477,10 @@
     renderPreview();
     showPage(location.hash.slice(1));
   })();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.settings) return;
+    if (pendingThemeRevision !== null) return;
+    settings.uiTheme = LT.Settings.normalize(changes.settings.newValue).uiTheme;
+    $('uiTheme').value = settings.uiTheme;
+  });
 })();

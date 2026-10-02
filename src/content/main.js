@@ -2,7 +2,7 @@
  * 会话总控：串起「视频元素 → 音频旁路 → Live 翻译 → 字幕层」。
  *
  * 会话约定：**开始翻译前冻结快照**。
- * Prompt、语言、场景、元数据在 start() 时算好并固定，之后重连、轮换、
+ * Prompt、语言、整理结果、元数据在 start() 时算好并固定，之后重连、轮换、
  * 用户改设置都不会影响本场会话——要生效就重开一场。
  */
 globalThis.LT = globalThis.LT || {};
@@ -29,10 +29,11 @@ globalThis.LT = globalThis.LT || {};
     level: 0,
     startedAt: 0,
     lastOutputAt: 0,
-    snapshot: null, // 本场冻结的 { prompt, sceneLabel, sourceLang, targetLang, meta }
+    snapshot: null, // 本场冻结的 Prompt、语言、模型与背景/术语配置
     client: null,
     tap: null,
     stabilizer: null,
+    debugLog: null,
   };
 
   let currentVideoId = '';
@@ -45,6 +46,14 @@ globalThis.LT = globalThis.LT || {};
   // 本场临时补充（弹窗输入）：只活在内容脚本内存里，不进 storage，
   // 换视频 / 刷新页面即消失。开始翻译时冻结进快照，运行中改动要重开一场才生效。
   let tempContext = '';
+  // 预览只活在当前页面；开始时校验全部输入，匹配才复用，换视频作废。
+  let liveReview = null;
+  let liveReviewRevision = 0;
+  let previewCache = null;
+  let previewGeneration = 0;
+  let previewBusy = false;
+  // 同页评论翻译可复用已核对的术语；公开的 review 已脱敏，按视频和目标语言再校验。
+  LT.LiveContext.currentReview = () => liveReview;
 
   // ---------- 与扩展其他部分通信 ----------
 
@@ -60,7 +69,9 @@ globalThis.LT = globalThis.LT || {};
       videoId: currentVideoId,
       title: currentMeta ? currentMeta.title : '',
       isLive: currentMeta ? currentMeta.isLive : false,
-      sceneLabel: session.snapshot ? session.snapshot.sceneLabel : '',
+      liveProvider: session.snapshot ? session.snapshot.provider : settings.liveProvider,
+      contextStatus: session.snapshot ? session.snapshot.contextStatus : '',
+      generatedTerms: session.snapshot ? session.snapshot.generatedTerms : 0,
       direction: session.snapshot
         ? `${LT.sourceLabel(session.snapshot.sourceLang)} → ${LT.targetLabel(
             session.snapshot.targetLang
@@ -69,6 +80,8 @@ globalThis.LT = globalThis.LT || {};
       usedMetadata: session.snapshot ? !!session.snapshot.metaUsed : false,
       usedTemp: session.snapshot ? !!session.snapshot.tempUsed : false,
       tempContext,
+      liveReviewRevision,
+      previewBusy,
       video: videoStartPending ? { ...videoSubs.status(), phase: 'reading' } : videoSubs.status(),
     };
   }
@@ -86,6 +99,7 @@ globalThis.LT = globalThis.LT || {};
   // ---------- 连接状态 → 播放器角标 ----------
 
   function onConnState(raw) {
+    if (session.debugLog) session.debugLog.event('connection', { state: raw });
     session.conn = raw;
     if (raw.startsWith('error:')) {
       session.error = raw.slice(6);
@@ -118,11 +132,116 @@ globalThis.LT = globalThis.LT || {};
 
   // ---------- 启停 ----------
 
+  function contextKey(runSettings, meta, notes) {
+    // 包含凭据以便配置改变后作废；只在页面内存比较，绝不传到弹窗或日志。
+    // 聊天/评论开关、字幕外观和整片场景不影响本场整理，避免无关操作触发重复模型调用。
+    const contextProvider = (runSettings.providers || []).find(p => p.id === runSettings.liveContextProviderId)
+      || (runSettings.providers || []).find(p => p.id === runSettings.subsProviderId) || runSettings.providers?.[0];
+    const config = [runSettings.liveProvider, runSettings.apiKeys, runSettings.baseUrl,
+      runSettings.qwenApiKey, runSettings.qwenWorkspaceHost, runSettings.sourceLang, runSettings.targetLang,
+      runSettings.useMetadata, runSettings.metadataLimit, runSettings.manualContext, runSettings.generateLiveContext,
+      runSettings.liveContextTimeoutSeconds, contextProvider];
+    return JSON.stringify([LT.YouTube.videoIdFromUrl(), config, meta, notes]);
+  }
+
+  async function prepareContext(runSettings, meta, notes, debugLog = null) {
+    const provider = runSettings.liveProvider === 'qwen' ? 'qwen' : 'gemini';
+    const metadataText = runSettings.useMetadata ? LT.Prompt.formatMetadata(meta, runSettings.metadataLimit) : '';
+    const userNotes = [runSettings.manualContext, notes].filter(Boolean).join('\n');
+    const key = contextKey(runSettings, meta, notes);
+    const cached = previewCache;
+    previewCache = null; // 同一份预览只用于接下来的一次启动。
+    if (cached && cached.key === key) {
+      const result = cached.result;
+      if (debugLog) debugLog.event('context_result', { result: result.review.contextStatus, reusedPreview: true, ms: 0, terms: Object.keys(result.generated?.phrases || {}).length });
+      return result;
+    }
+    let generated = null;
+    let contextStatus = !runSettings.generateLiveContext ? 'disabled' : !metadataText ? 'no_metadata' : 'unavailable';
+    let contextError = '';
+    let generatorModel = '';
+    let generatorProvider = '';
+    const contextTimeoutSeconds = LT.LiveContext.timeoutMs(runSettings) / 1000;
+    const generatorRequest = metadataText && runSettings.generateLiveContext ? LT.LiveContext.buildRequest(runSettings, metadataText, userNotes) : null;
+    if (debugLog) debugLog.event('context_start', { enabled: !!generatorRequest, metadataChars: metadataText.length,
+      providerId: runSettings.liveContextProviderId, timeoutSeconds: contextTimeoutSeconds });
+    if (generatorRequest) {
+      const started = Date.now();
+      try {
+        const config = LT.TextModel?.resolve?.(runSettings, runSettings.liveContextProviderId);
+        generatorModel = config?.model || '';
+        generatorProvider = config?.name || '';
+        generated = LT.LiveContext.preserveIdentity(await LT.LiveContext.generate(runSettings, metadataText, userNotes), meta);
+        contextStatus = generated ? 'generated' : 'unavailable';
+      } catch (err) {
+        contextStatus = 'error';
+        contextError = err && err.message || '背景整理失败';
+        console.warn('[流译] 本场背景整理失败，继续使用基础配置', contextError);
+      }
+      if (debugLog) debugLog.event('context_result', { result: contextStatus, ms: Date.now() - started,
+        model: generatorModel, timeoutSeconds: contextTimeoutSeconds, terms: Object.keys(generated?.phrases || {}).length, error: contextError });
+    }
+    const prompt = LT.Prompt.build({ sourceLang: runSettings.sourceLang, targetLang: runSettings.targetLang,
+      metadataText: generated ? '' : metadataText, generatedContext: LT.LiveContext.asPromptContext(generated),
+      manualContext: runSettings.manualContext, tempContext: notes });
+    const review = {
+      provider, videoId: meta?.videoId || LT.YouTube.videoIdFromUrl(), sourceLang: runSettings.sourceLang,
+      targetLang: runSettings.targetLang, contextStatus, contextError,
+      generated, generatorRequest, generatorModel, generatorProvider, contextTimeoutSeconds, prompt: provider === 'gemini' ? prompt : '',
+      translation: provider === 'qwen' ? LT.LiveContext.translationConfig(runSettings.targetLang, generated?.phrases || {}) : null,
+    };
+    return { key, metadataText, prompt, generated, review };
+  }
+
+  function saveReview(review, runSettings, phase) {
+    liveReview = LT.LiveLog.safe({ ...review, phase }, LT.LiveLog.secretsFrom(runSettings), Infinity);
+    liveReviewRevision++;
+  }
+
+  function invalidatePreview() {
+    previewGeneration++;
+    previewBusy = false;
+    previewCache = null;
+    if (liveReview?.phase === 'preview') {
+      liveReview = { ...liveReview, stale: true };
+      liveReviewRevision++;
+    }
+  }
+
+  async function previewLiveContext() {
+    if (!LT.YouTube.isWatchPage()) throw new Error('请先打开 YouTube 视频页');
+    if (session.phase !== 'idle') throw new Error('请先停止翻译，再生成开播预览');
+    const generation = ++previewGeneration;
+    const videoId = LT.YouTube.videoIdFromUrl();
+    const notes = tempContext;
+    const isCurrent = () => generation === previewGeneration && videoId === LT.YouTube.videoIdFromUrl() && session.phase === 'idle';
+    previewBusy = true;
+    previewCache = null;
+    pushStatus();
+    try {
+      const runSettings = await LT.Settings.load();
+      if (!isCurrent()) throw new Error('预览已取消');
+      let meta = currentMeta;
+      if (runSettings.useMetadata && (!meta || meta.videoId !== videoId)) meta = await LT.YouTube.waitForMeta({ videoId, tries: 4 });
+      if (!isCurrent()) throw new Error('预览已取消');
+      const result = await prepareContext(runSettings, meta, notes);
+      if (!isCurrent()) throw new Error('预览已取消');
+      if (meta) currentMeta = meta;
+      previewCache = { key: result.key, result };
+      saveReview(result.review, runSettings, 'preview');
+      return { ok: true, review: liveReview };
+    } finally {
+      if (generation === previewGeneration) { previewBusy = false; pushStatus(); }
+    }
+  }
+
   async function start(reason) {
     if (session.phase !== 'idle') return;
     videoStartPending = false;
     videoSubs.deactivate(); // 实时翻译和整片字幕共用字幕层，开始实时翻译时整片字幕让位
     const generation = ++sessionGeneration;
+    previewGeneration++;
+    previewBusy = false;
     const videoId = LT.YouTube.videoIdFromUrl();
     const runTempContext = tempContext;
     const isCurrent = () => generation === sessionGeneration && videoId === LT.YouTube.videoIdFromUrl();
@@ -135,9 +254,21 @@ globalThis.LT = globalThis.LT || {};
       if (!isCurrent()) return;
       settings = runSettings;
 
-      const key = LT.Settings.pickKey(settings);
+      const liveProvider = runSettings.liveProvider === 'qwen' ? 'qwen' : 'gemini';
+      session.debugLog = LT.LiveLog.open({
+        level: runSettings.debugLogLevel,
+        provider: liveProvider,
+        model: liveProvider === 'qwen' ? LT.QWEN_MODEL : LT.MODEL,
+        videoId,
+        sourceLang: runSettings.sourceLang,
+        targetLang: runSettings.targetLang,
+        reason,
+      }, runSettings);
+      const key = liveProvider === 'qwen' ? runSettings.qwenApiKey : LT.Settings.pickKey(runSettings);
       if (!key) {
-        onConnState('error:未配置 API Key，请在扩展设置里填写');
+        onConnState(`error:未配置${liveProvider === 'qwen' ? '千问' : ' Gemini'} API Key，请在扩展设置里填写`);
+        if (session.debugLog) session.debugLog.finish('missing_key').catch(() => {});
+        session.debugLog = null;
         session.phase = 'idle';
         return;
       }
@@ -147,6 +278,8 @@ globalThis.LT = globalThis.LT || {};
       const player = LT.YouTube.player();
       if (!player || !video) {
         onConnState('error:没有找到播放器');
+        if (session.debugLog) session.debugLog.finish('no_player').catch(() => {});
+        session.debugLog = null;
         session.phase = 'idle';
         return;
       }
@@ -162,41 +295,51 @@ globalThis.LT = globalThis.LT || {};
         if (meta) currentMeta = meta;
       }
       // 等待期间设置页可能发来新配置，本场继续使用启动时读取的那一份。
-      const scene = LT.Settings.scene(runSettings);
-      const metadataText = runSettings.useMetadata
-        ? LT.Prompt.formatMetadata(meta, runSettings.metadataLimit)
-        : '';
-      const prompt = LT.Prompt.build({
-        scene,
-        sourceLang: runSettings.sourceLang,
-        targetLang: runSettings.targetLang,
-        metadataText,
-        manualContext: runSettings.manualContext,
-        tempContext: runTempContext,
-      });
+      if (session.debugLog) {
+        session.debugLog.details({ metadata: meta, manualContext: runSettings.manualContext, tempContext: runTempContext });
+      }
+      if (runSettings.generateLiveContext && runSettings.useMetadata && meta) {
+        caption.setStatus(`流译：整理本场背景和术语…（最多等待 ${LT.LiveContext.timeoutMs(runSettings) / 1000} 秒）`, 'warn', false);
+      }
+      const { metadataText, prompt, generated, review } = await prepareContext(runSettings, meta, runTempContext, session.debugLog);
+      if (!isCurrent()) return;
+      saveReview(review, runSettings, 'session');
+      if (session.debugLog) {
+        session.debugLog.details({ generatedContext: generated, generatorRequest: review.generatorRequest,
+          generatorModel: review.generatorModel, generatorProvider: review.generatorProvider,
+          contextTimeoutSeconds: review.contextTimeoutSeconds, contextStatus: review.contextStatus, contextError: review.contextError,
+          prompt: liveProvider === 'gemini' ? prompt : '', qwenPhrases: liveProvider === 'qwen' && generated ? generated.phrases : {}, translation: review.translation });
+        session.debugLog.event('session_config', { provider: liveProvider, generatedTerms: generated ? Object.keys(generated.phrases).length : 0 });
+      }
       session.snapshot = {
-        prompt,
-        sceneLabel: scene.label,
+        prompt: liveProvider === 'gemini' ? prompt : '',
+        provider: liveProvider,
+        generatedTerms: generated ? Object.keys(generated.phrases).length : 0,
+        contextStatus: review.contextStatus,
         sourceLang: runSettings.sourceLang,
         targetLang: runSettings.targetLang,
-        metaUsed: !!metadataText,
-        tempUsed: !!runTempContext,
+        metaUsed: liveProvider === 'gemini' && !!metadataText,
+        tempUsed: liveProvider === 'gemini' && !!runTempContext,
         videoId: LT.YouTube.videoIdFromUrl(),
       };
       console.info(
-        `[流译] 开始（${reason}）｜场景 ${scene.label}｜${LT.sourceLabel(
+        `[流译] 开始（${reason}）｜${liveProvider === 'qwen' ? '千问 3.8' : 'Gemini 3.5'}｜${LT.sourceLabel(
           runSettings.sourceLang
         )} → ${LT.targetLabel(runSettings.targetLang)}｜元数据 ${
-          metadataText ? '已注入' : '未使用'
-        }｜临时补充 ${runTempContext ? '已注入' : '未使用'}`
+          metadataText ? liveProvider === 'qwen' ? '仅供术语整理' : '已注入' : '未使用'
+        }｜术语整理 ${generated ? `${Object.keys(generated.phrases).length} 条` : '未生成'}｜临时补充 ${runTempContext
+          ? liveProvider === 'qwen' ? generated ? '已供词表整理' : '未应用' : '已注入' : '未使用'}`
       );
 
       // ---- 字幕稳定器 ----
       session.stabilizer = new LT.SubtitleStabilizer({
         idleCommitMs: runSettings.stabIdleMs,
         maxCurrentChars: runSettings.stabMaxChars,
+        detectOverlap: liveProvider !== 'qwen',
+        suppressRepeats: liveProvider !== 'qwen',
         onRender: (current, committed) => {
           if (!isCurrent()) return;
+          if (committed.length && session.debugLog) session.debugLog.event('caption_commit', { lines: committed, videoMs: Math.round(video.currentTime * 1000) }, true);
           caption.pushCommitted(committed);
           caption.setCurrent(current);
           caption.render();
@@ -204,32 +347,53 @@ globalThis.LT = globalThis.LT || {};
       });
 
       // ---- Live 客户端 ----
-      session.client = new LT.GeminiLiveClient({
-        keyProvider: () => LT.Settings.pickKey(runSettings),
-        baseUrl: runSettings.baseUrl,
-        prompt,
+      const Client = liveProvider === 'qwen' ? LT.QwenLiveClient : LT.GeminiLiveClient;
+      session.client = new Client({
+        ...(liveProvider === 'qwen'
+          ? {
+              workspaceHost: runSettings.qwenWorkspaceHost,
+              apiKey: key,
+              phrases: generated ? generated.phrases : {},
+            }
+          : {
+              keyProvider: () => LT.Settings.pickKey(runSettings),
+              baseUrl: runSettings.baseUrl,
+              prompt,
+              echoTargetLanguage: runSettings.echoTargetLanguage,
+              rotateAfterMs: runSettings.rotateSeconds * 1000,
+            }),
         targetLang: runSettings.targetLang,
-        echoTargetLanguage: runSettings.echoTargetLanguage,
-        rotateAfterMs: runSettings.rotateSeconds * 1000,
         listener: {
           onState: (state) => { if (isCurrent()) onConnState(state); },
-          onInputText: (t) => {
+          onInputText: (t, info = {}) => {
+            if (isCurrent() && session.debugLog) session.debugLog.event('source_text', { text: t, ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
             // 仅译文模式不记原文；双语和仅原文都要，显示由字幕层按模式过滤
             if (!isCurrent() || settings.captionDisplayMode === 'translationOnly') return;
             caption.setSource(t);
             caption.render();
           },
-          onOutputText: (t) => {
+          onOutputText: (t, info = {}) => {
             if (!isCurrent()) return;
+            if (session.debugLog) session.debugLog.event('translation_fragment', { text: t, ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
             session.lastOutputAt = Date.now();
             session.stabilizer.onFragment(t);
           },
+          onOutputComplete: (info) => {
+            if (!isCurrent()) return;
+            if (session.debugLog) session.debugLog.event('translation_done', { ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
+            session.stabilizer.flush();
+          },
+          onDiagnostic: (type, value) => { if (isCurrent() && session.debugLog) session.debugLog.event(type, value); },
         },
       });
 
       // ---- 音频旁路 ----
       const tap = new LT.AudioTap({
-        onChunk: (u8) => isCurrent() && session.client && session.client.feedChunk(u8),
+        onChunk: (u8) => {
+          if (!isCurrent() || !session.client) return;
+          if (session.debugLog) session.debugLog.audioChunk(u8.byteLength);
+          session.client.feedChunk(u8);
+        },
         onLevel: (pct) => {
           if (!isCurrent()) return;
           session.level = pct;
@@ -239,6 +403,7 @@ globalThis.LT = globalThis.LT || {};
       const mode = await tap.attach(video);
       if (!isCurrent()) { tap.detach(); return; }
       session.mode = mode;
+      if (session.debugLog) session.debugLog.event('audio_capture', { mode });
       session.startedAt = Date.now();
       session.lastOutputAt = 0;
       session.phase = 'running';
@@ -248,9 +413,10 @@ globalThis.LT = globalThis.LT || {};
     } catch (err) {
       if (!isCurrent()) return;
       console.error('[流译] 启动失败', err);
+      if (session.debugLog) session.debugLog.event('start_error', { message: err && err.message ? err.message : String(err) });
       // 先把半成品拆干净，再报错——client.stop() 会发 'stopped'，
       // 顺序反了的话报错提示会立刻被它清掉，用户什么都看不到。
-      teardown();
+      teardown('start_error');
       session.phase = 'idle';
       onConnState(`error:${err && err.message ? err.message : '启动失败'}`);
       pushStatus();
@@ -262,13 +428,19 @@ globalThis.LT = globalThis.LT || {};
     }
   }
 
-  function teardown() {
+  function teardown(reason = 'stopped') {
+    if (session.debugLog && session.client) session.debugLog.event('audio_sent', {
+      sentChunks: session.client.chunksSent || 0, queuedChunks: session.client.queue?.length || 0,
+      droppedChunks: session.client.droppedChunks || 0,
+    });
     if (session.tap) session.tap.detach();
     if (session.client) session.client.stop();
     if (session.stabilizer) session.stabilizer.reset();
+    if (session.debugLog) session.debugLog.finish(reason).catch(() => {});
     session.tap = null;
     session.client = null;
     session.stabilizer = null;
+    session.debugLog = null;
     session.mode = '';
     session.level = 0;
     session.startedAt = 0;
@@ -276,11 +448,13 @@ globalThis.LT = globalThis.LT || {};
     gateHint = '';
   }
 
-  async function stop() {
+  async function stop(reason = 'user') {
     sessionGeneration++;
+    previewGeneration++;
+    previewBusy = false;
     videoStartPending = false;
     if (session.phase === 'idle') return;
-    teardown();
+    teardown(reason);
     session.phase = 'idle';
     session.conn = 'stopped';
     session.error = '';
@@ -318,6 +492,7 @@ globalThis.LT = globalThis.LT || {};
     }
 
     if (hint === gateHint) return;
+    if (session.debugLog) session.debugLog.event('gate', { ad, paused, muted: silent, hint });
     gateHint = hint;
     caption.setStatus(hint, 'warn', false);
   }
@@ -342,7 +517,10 @@ globalThis.LT = globalThis.LT || {};
     currentVideoId = id;
     currentMeta = null;
     tempContext = ''; // 临时补充跟着视频走，换视频即作废
-    stop(); // 同步作废待启动操作，不能在换视频处理中留下异步空档
+    previewCache = null;
+    liveReview = null;
+    liveReviewRevision++;
+    stop('navigation'); // 同步作废待启动操作，不能在换视频处理中留下异步空档
     videoSubs.onVideoChanged(id, settings); // 作废旧任务；有缓存会按设置自动加载
     ensureMounted();
     if (!id) {
@@ -358,11 +536,12 @@ globalThis.LT = globalThis.LT || {};
 
   function maybeAutoStart() {
     if (session.phase !== 'idle') return;
+    if (previewBusy) return;
     if (!settings.autoStartLive) return;
     if (!currentVideoId || currentVideoId === userStoppedFor) return;
     if (currentVideoId === autoStartedFor) return;
     if (!currentMeta || !currentMeta.isLive) return;
-    if (LT.Settings.keyList(settings).length === 0) return;
+    if (settings.liveProvider === 'qwen' ? !settings.qwenApiKey : LT.Settings.keyList(settings).length === 0) return;
     autoStartedFor = currentVideoId;
     start('自动·直播');
   }
@@ -372,6 +551,12 @@ globalThis.LT = globalThis.LT || {};
     switch (msg.type) {
       case LT.MSG.QUERY_STATUS:
         sendResponse(statusSnapshot());
+        return true;
+      case LT.MSG.QUERY_LIVE_CONTEXT:
+        sendResponse({ review: liveReview, pending: previewBusy });
+        return true;
+      case LT.MSG.PREVIEW_LIVE_CONTEXT:
+        previewLiveContext().then(sendResponse, err => sendResponse({ ok: false, error: err && err.message || '预览失败' }));
         return true;
       case LT.MSG.START:
         userStoppedFor = '';
@@ -392,12 +577,15 @@ globalThis.LT = globalThis.LT || {};
         break;
       case LT.MSG.SETTINGS_CHANGED:
         LT.Settings.load().then((s) => {
+          if (contextKey(settings, currentMeta, tempContext) !== contextKey(s, currentMeta, tempContext)) invalidatePreview();
           settings = s;
           caption.applySettings(s);
           videoSubs.updateSettings(s);
+          pushStatus();
         });
         break;
       case LT.MSG.SET_TEMP_CONTEXT:
+        if (tempContext !== String(msg.payload || '').trim()) invalidatePreview();
         tempContext = String(msg.payload || '').trim();
         sendResponse({ ok: true });
         break;
@@ -432,7 +620,7 @@ globalThis.LT = globalThis.LT || {};
     if (videoStartPending || ['reading', 'translating'].includes(videoSubs.status().phase)) return;
     const videoId = LT.YouTube.videoIdFromUrl();
     if (!videoId || !LT.YouTube.isWatchPage() || (currentMeta?.videoId === videoId && currentMeta.isLive)) return;
-    stop();
+    stop('switch_to_subtitles');
     const generation = ++sessionGeneration;
     const isCurrent = () => generation === sessionGeneration && videoId === LT.YouTube.videoIdFromUrl();
     const runMeta = currentMeta?.videoId === videoId ? currentMeta : null;
@@ -458,7 +646,7 @@ globalThis.LT = globalThis.LT || {};
   }
 
   window.addEventListener('pagehide', () => {
-    stop();
+    stop('pagehide');
     videoSubs.cancel();
   });
 
@@ -529,5 +717,5 @@ globalThis.LT = globalThis.LT || {};
   }
 
   // 方便在控制台手动调试：LT.debug.start() / LT.debug.stop() / LT.debug.videoSubs / LT.debug.probeCaptions()
-  LT.debug = { start, stop, session, status: statusSnapshot, videoSubs, startVideoSubs, probeCaptions };
+  LT.debug = { start, stop, session, status: statusSnapshot, videoSubs, startVideoSubs, probeCaptions, previewLiveContext };
 })();
