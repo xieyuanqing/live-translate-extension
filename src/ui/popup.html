@@ -69,6 +69,17 @@
       </div>
 
 
+      <section id="textBox" class="text-box hidden">
+        <div class="text-head">YouTube 弹幕与评论</div>
+        <label class="text-check"><input type="checkbox" id="chatTranslationToggle" role="switch" /><span>弹幕自动翻译<small>Chrome 本地模型</small></span></label>
+        <label class="text-check"><input type="checkbox" id="commentTranslationToggle" role="switch" /><span>评论翻译按钮<small>使用字幕文字模型</small></span></label>
+        <div class="text-actions">
+          <button id="translateVisibleComments" class="small">翻译当前可见评论</button>
+          <button id="cancelCommentTranslation" class="ghost small">停止评论翻译</button>
+        </div>
+        <div id="textState" class="muted small" role="status"></div>
+        <button id="openTextOptions" class="ghost small">弹幕与评论设置</button>
+      </section>
 
       <details id="contextBox" class="context-box hidden">
         <summary>本场提示词与术语</summary>

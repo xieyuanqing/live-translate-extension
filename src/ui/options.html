@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="ui.css" />
     <link rel="stylesheet" href="../content/caption-layer.css" />
+    <link rel="stylesheet" href="../content/youtube-text.css" />
     <link rel="stylesheet" href="options.css" />
     <title>流译 · 设置</title>
   </head>
@@ -25,6 +26,7 @@
         <a href="#general"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h10M9 3v2M6 5c0 5 3 8 7 10M12 5c0 5-3 8-8 11M14 20l4-11 4 11M15.5 16h5" /></svg></span>语言与背景</a>
         <a href="#live"><span class="nav-icon purple" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4" /></svg></span>实时翻译</a>
         <a href="#video"><span class="nav-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m10 8 6 4-6 4z" /></svg></span>整片字幕</a>
+        <a href="#text"><span class="nav-icon orange" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 14a3 3 0 0 1-3 3H9l-5 4V7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3zM8 9h8M8 13h5" /></svg></span>弹幕与评论</a>
         <a href="#models"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="3" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3M10 10h4v4h-4z" /></svg></span>文字模型</a>
         <span class="nav-label">偏好设置</span>
         <a href="#style"><span class="nav-icon pink" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m10 14 9-11 2 2-9 11M10 14c-4-2-4 2-5 4l-2 2c6 1 9-1 7-6z" /></svg></span>字幕外观</a>
@@ -240,6 +242,78 @@
           </section>
         </section>
 
+        <!-- ================= 弹幕与评论 ================= -->
+        <section class="page" data-page="text">
+          <section class="card text-style-card">
+            <div class="text-style-heading">
+              <div><h2>译文样式</h2><p class="muted small">评论和弹幕分别设置，选好就会应用到页面上的译文。</p></div>
+              <div id="textStyleScope" class="text-style-segment" role="group" aria-label="设置哪种译文">
+                <button type="button" data-scope="comment" aria-pressed="true">评论</button>
+                <button type="button" data-scope="chat" aria-pressed="false">弹幕</button>
+              </div>
+            </div>
+            <fieldset class="text-style-fieldset">
+              <legend class="label">预设样式</legend>
+              <div id="textStyleChoices" class="text-style-grid"></div>
+            </fieldset>
+            <div class="text-style-color-row">
+              <div><label class="label" for="textStyleColor">装饰颜色</label><p id="textStyleColorHint" class="muted small"></p></div>
+              <label class="text-style-color-control"><input id="textStyleColor" type="color" aria-label="装饰颜色" /><span id="textStyleColorValue"></span></label>
+            </div>
+            <div class="text-style-preview-heading">
+              <span class="label">页面预览 <span id="textStyleSelected" class="muted small"></span></span>
+              <div id="textStyleTheme" class="text-style-segment" role="group" aria-label="预览主题">
+                <button type="button" data-theme="light" aria-pressed="true">浅色网页</button>
+                <button type="button" data-theme="dark" aria-pressed="false">深色网页</button>
+              </div>
+            </div>
+            <div id="textStylePreview" class="text-style-preview" data-theme="light">
+              <div id="textStylePreviewComment" class="text-style-preview-row">
+                <span class="text-style-avatar" aria-hidden="true">み</span>
+                <div class="text-style-preview-body">
+                  <div class="text-style-author">みなと <span>2 小时前</span></div>
+                  <span id="textStyleCommentSource" class="text-style-original">今日の歌枠すごく楽しかった！次の配信も楽しみです。<br />この曲は何度聴いても飽きない 🎉</span>
+                  <div class="lt-yt-text lt-yt-comment"><span id="textStyleCommentResult" class="lt-yt-text-result notranslate"></span></div>
+                  <div class="text-style-native-actions">♡ 128　 回复</div>
+                </div>
+              </div>
+              <div id="textStylePreviewChat" class="text-style-preview-row" hidden>
+                <span class="text-style-avatar" aria-hidden="true">S</span>
+                <div class="text-style-preview-body">
+                  <div class="text-style-author">Sora <span>会员</span></div>
+                  <span id="textStyleChatSource" class="text-style-original">この曲すごく好き！素敵な配信をありがとう ❤️</span>
+                  <span id="textStyleChatResult" class="lt-yt-text lt-yt-chat-result notranslate"></span>
+                </div>
+              </div>
+            </div>
+            <div class="text-style-footer"><span class="muted small">切换样式不会重新翻译，也不会消耗模型额度。</span><button id="textStyleReset" type="button" class="ghost small">恢复评论默认</button></div>
+          </section>
+          <section class="card">
+            <h2>YouTube 弹幕／聊天</h2>
+            <label class="check">
+              <input type="checkbox" id="enableChatTranslation" />
+              <span>开启 Chrome 本地聊天翻译</span>
+            </label>
+            <p class="muted small">自动翻译聊天区的新文字消息，在原文下面显示译文。使用「语言与背景」里的源语言和目标语言，原文、用户名、表情及链接保留。</p>
+            <p class="muted small">首次启用时，在 YouTube 聊天区点「准备本地翻译」下载所需语言包。需要支持 Translator API 的桌面版 Chrome；源语言选自动检测时，还需本地 Language Detector。不可用时直接提示，不会转为付费接口。</p>
+            <p class="muted small">消息在本机翻译，不使用你的文字模型 Key。队列最多 30 条，优先仍可见的消息；纯表情、数字刷屏、www／草／LOL／GG 等短反应和超过 2000 字的消息跳过，重复句在当前页面复用结果。</p>
+          </section>
+          <section class="card">
+            <h2>YouTube 评论及回复</h2>
+            <label class="check">
+              <input type="checkbox" id="enableCommentTranslation" />
+              <span>显示评论翻译按钮</span>
+            </label>
+            <p class="muted small">每条文字评论下显示「翻译」，评论区及弹窗另有「翻译当前可见评论」。只翻译已选择的内容，结果显示在原文下面；未加载的评论不会被抓取，回复只在展开后参与可见内容翻译。</p>
+            <div class="field">
+              <span class="label">复用字幕翻译模型</span>
+              <p id="commentModelSummary" class="muted small"></p>
+              <a href="#models" class="small">配置字幕翻译模型</a>
+            </div>
+            <p class="muted small">调用会消耗文字模型额度。可附带视频标题、简介、长期背景及同页已整理的术语；翻译回复时附带父评论。每批最多 8 条，最长单条 6000 字；页面内复用已翻译结果，停止或换视频取消未完成请求。</p>
+          </section>
+        </section>
+
         <!-- ================= 文字模型 ================= -->
         <section class="page" data-page="models">
           <section class="card">
@@ -257,7 +331,7 @@
               <div class="field">
                 <label class="label" for="modelSubsProviderId">字幕翻译模型</label>
                 <select id="modelSubsProviderId"></select>
-                <p class="muted small">翻译 YouTube 字幕轨，可选质量更高的模型。</p>
+                <p class="muted small">翻译 YouTube 字幕轨及按需选择的评论，可选质量更高的模型。</p>
               </div>
             </div>
             <div id="providers" class="providers"></div>
@@ -425,6 +499,7 @@
     <script src="../common/constants.js"></script>
     <script src="../common/settings.js"></script>
     <script src="theme.js"></script>
+    <script src="../common/youtube-text.js"></script>
     <script src="../common/prompt.js"></script>
     <script src="../common/live-log.js"></script>
     <script src="../subs/cache.js"></script>
@@ -433,6 +508,7 @@
     <script src="../content/caption-layer.js"></script>
     <script src="options-providers.js"></script>
     <script src="options-style.js"></script>
+    <script src="options-text-style.js"></script>
     <script src="options-data.js"></script>
     <script src="options.js"></script>
   </body>

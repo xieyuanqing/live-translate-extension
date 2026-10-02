@@ -99,6 +99,13 @@ const POPUP_STUB = `(() => {
     if (msg.type === 'lt:vs-start') videoPhase = 'translating';
     if (msg.type === 'lt:vs-cancel') videoPhase = 'partial';
     if (msg.type === 'lt:vs-set-visible') videoVisible = msg.payload;
+    if (msg.type === 'lt:query-text-status') {
+      const settings = LT.Settings.normalize((await chrome.storage.local.get('settings')).settings);
+      return { comments: { enabled: settings.enableCommentTranslation, busy: false, pending: 0, translated: 0, error: '' },
+        chat: { enabled: settings.enableChatTranslation, phase: 'waiting', translated: 0, error: '离线预览不运行 Chrome 翻译' } };
+    }
+    if (msg.type === 'lt:translate-visible-comments') return { ok: true, count: 0 };
+    if (msg.type === 'lt:cancel-comment-translation') return { ok: true };
     if (msg.type === 'lt:query-status') return { onWatchPage: true, isLive: previewMode !== 'video', videoId: 'preview01', title: previewMode === 'video' ? '离线预览 · 歌回录像' : '离线预览 · 生日直播',
       phase: running ? 'running' : 'idle', conn: running ? 'ready' : '', elapsedMs: running ? 123000 : 0, level: 20,
       error: previewMode === 'error' ? '连接失败，请检查接口配置后重试。' : '',

@@ -120,6 +120,19 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type === LT.MSG.QUERY_CHAT_STATUS) {
+    if (!sender.tab || sender.frameId !== 0 || !/^https:\/\/www\.youtube\.com\//.test(sender.url || '')) return;
+    // 聊天帧可能先于主页面初始化，弹窗查询时补取状态，不保存跨页面会话。
+    chrome.tabs.sendMessage(sender.tab.id, { type: LT.MSG.QUERY_CHAT_STATUS }).catch(() => {});
+    return;
+  }
+  if (msg?.type === LT.MSG.CHAT_STATUS) {
+    if (!sender.tab || !/^https:\/\/www\.youtube\.com\/live_chat(?:_replay)?\/?(?:\?|$)/.test(sender.url || '')) return;
+    const currentVideo = new URL(sender.tab.url || 'https://www.youtube.com/').searchParams.get('v');
+    if (currentVideo && msg.payload?.videoId && currentVideo !== msg.payload.videoId) return;
+    chrome.tabs.sendMessage(sender.tab.id, msg, { frameId: 0 }).catch(() => {});
+    return;
+  }
   if (!msg || msg.type !== LT.MSG.STATUS) return;
   if (sender.tab && typeof sender.tab.id === 'number') {
     paintBadge(sender.tab.id, msg.payload || {});

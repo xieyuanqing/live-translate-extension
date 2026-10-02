@@ -12,6 +12,7 @@
   let contextRevision = -1;
   let contextTabVideoId = '';
   let contextLoading = false;
+  let textStatus = null;
 
   const CONN_LABEL = {
     '': '未开始',
@@ -227,9 +228,53 @@
 
   async function refresh() {
     status = await send(LT.MSG.QUERY_STATUS);
+    textStatus = await send(LT.MSG.QUERY_TEXT_STATUS);
     renderStatus();
+    renderTextStatus();
     if ($('contextBox').open) await refreshContext();
   }
+
+  function renderTextStatus() {
+    const show = !!status?.onWatchPage;
+    $('textBox').classList.toggle('hidden', !show);
+    $('chatTranslationToggle').checked = !!settings.enableChatTranslation;
+    $('commentTranslationToggle').checked = !!settings.enableCommentTranslation;
+    const comments = textStatus?.comments;
+    $('translateVisibleComments').disabled = !show || !settings.enableCommentTranslation || !!comments?.busy;
+    $('cancelCommentTranslation').disabled = !comments?.busy;
+    const chat = textStatus?.chat;
+    const chatLabels = { off: '已关闭', waiting: '请在聊天区准备语言包', preparing: '准备/下载语言包中', ready: '本地翻译中', error: '不可用' };
+    const lines = [];
+    if (settings.enableChatTranslation) lines.push(chat
+      ? `聊天：${chat.error || chatLabels[chat.phase] || chat.phase}${chat.translated ? ` · 已译 ${chat.translated} 条` : ''}`
+      : '聊天：请在 YouTube 聊天区查看本地翻译状态');
+    if (settings.enableCommentTranslation) lines.push(comments?.error ||
+      (comments?.busy ? `评论：等待/翻译中 ${comments.pending || 0} 条` : `评论：按需翻译${comments?.translated ? ` · 已译 ${comments.translated} 条` : ''}`));
+    $('textState').textContent = lines.join('\n') || '两项独立开关，不需要启动字幕翻译。';
+  }
+
+  for (const [id, key] of [['chatTranslationToggle', 'enableChatTranslation'], ['commentTranslationToggle', 'enableCommentTranslation']]) {
+    $(id).addEventListener('change', event => {
+      const checked = event.target.checked;
+      settingsSave = settingsSave.then(async () => {
+        settings = await LT.Settings.save({ [key]: checked });
+        await send(LT.MSG.SETTINGS_CHANGED);
+        await refresh();
+      }).catch(() => { $('textState').textContent = '保存失败，请重新打开弹窗后重试。'; });
+    });
+  }
+  $('translateVisibleComments').addEventListener('click', async () => {
+    await settingsSave;
+    const result = await send(LT.MSG.TRANSLATE_VISIBLE_COMMENTS);
+    await refresh();
+    if (!result?.ok) $('textState').textContent = result?.error || '页面未响应，请刷新 YouTube 后重试。';
+    else if (!result.count) $('textState').textContent = '当前没有可见的文字评论，请滚到评论区或展开回复。';
+  });
+  $('cancelCommentTranslation').addEventListener('click', async () => {
+    await send(LT.MSG.CANCEL_COMMENT_TRANSLATION);
+    await refresh();
+  });
+  $('openTextOptions').addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('src/ui/options.html#text') }));
 
   function renderContext() {
     const r = contextReview;
@@ -408,6 +453,7 @@
       $('sourceLang').value = settings.sourceLang;
       $('targetLang').value = settings.targetLang;
       renderStatus();
+      renderTextStatus();
     }).catch(() => {});
   });
 

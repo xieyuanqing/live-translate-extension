@@ -39,6 +39,13 @@ globalThis.LT = globalThis.LT || {};
     s.qwenWorkspaceHost = String(s.qwenWorkspaceHost || '').trim().replace(/^wss?:\/\//i, '').replace(/\/$/, '');
     s.qwenApiKey = String(s.qwenApiKey || '').trim();
     s.generateLiveContext = s.generateLiveContext !== false;
+    s.enableChatTranslation = s.enableChatTranslation === true;
+    s.enableCommentTranslation = s.enableCommentTranslation === true;
+    for (const scope of ['comment', 'chat']) {
+      const styleKey = `${scope}TranslationStyle`, colorKey = `${scope}TranslationColor`;
+      if (!LT.TEXT_STYLES.some(style => style.code === s[styleKey])) s[styleKey] = LT.DEFAULTS[styleKey];
+      s[colorKey] = color(s[colorKey], LT.DEFAULTS[colorKey]);
+    }
     s.liveContextTimeoutSeconds = [30, 60, 120].includes(Number(s.liveContextTimeoutSeconds))
       ? Number(s.liveContextTimeoutSeconds) : 60;
     if (!LT.LOG_LEVELS.some((level) => level.code === s.debugLogLevel)) s.debugLogLevel = 'off';

@@ -11,12 +11,13 @@
   let saveQueue = Promise.resolve();
   let pendingThemeRevision = null;
 
-  const PAGES = ['general', 'live', 'video', 'models', 'style', 'data', 'about'];
+  const PAGES = ['general', 'live', 'video', 'text', 'models', 'style', 'data', 'about'];
   const PAGE_INFO = {
     general: ['语言与背景', '设定翻译方向，补充常用的人名与背景。'],
     live: ['实时翻译', '选择直播模型，设置开播前的背景与术语整理。'],
     video: ['整片字幕', '读取视频字幕，翻译后保存在本机，方便下次观看。'],
-    models: ['文字模型', '整理用轻量模型，字幕用更强的模型，分别选择。'],
+    text: ['弹幕与评论', '聊天自动翻译，评论按需翻译；两项分别开启。'],
+    models: ['文字模型', '整理用轻量模型，字幕与评论用更强的模型，分别选择。'],
     style: ['字幕外观', '调整双语显示、字体与颜色，直接查看预览效果。'],
     data: ['数据管理', '查看诊断日志、管理字幕缓存，备份你的设置。'],
     about: ['关于流译', '版本信息、快捷键与诊断说明。'],
@@ -44,7 +45,7 @@
     subsProviderId: 'subsProviderId', modelSubsProviderId: 'subsProviderId',
   };
   const CHECK_FIELDS = ['autoStartLive', 'pauseOnAd', 'useMetadata', 'echoTargetLanguage', 'generateLiveContext',
-    'autoShowCached'];
+    'autoShowCached', 'enableChatTranslation', 'enableCommentTranslation'];
   const RANGE_FIELDS = ['metadataLimit', 'rotateSeconds', 'stabIdleMs', 'stabMaxChars'];
 
   // ---------- 保存 ----------
@@ -161,6 +162,7 @@
       /* 无痕模式等 */
     }
     if (page === 'style') style.refresh(); // 隐藏时容器宽度为 0，显示后重算字号
+    if (page === 'text') textStyle.refresh();
     if (page === 'data') { renderCache(); dataUI.refreshLogs(); }
   }
 
@@ -173,6 +175,7 @@
     select: (id, field = 'subsProviderId') => queueSave({ [field]: id }),
   });
   const style = LT.OptionsUI.mountStyle({ $, settings: () => settings, save: queueSave });
+  const textStyle = LT.OptionsUI.mountTextStyle({ $, settings: () => settings, save: queueSave });
   const dataUI = LT.OptionsUI.mountData({
     $,
     settings: () => settings,
@@ -195,6 +198,8 @@
       }
       el.value = settings[field];
     }
+    const commentModel = LT.Settings.provider(settings);
+    $('commentModelSummary').textContent = `${commentModel.name || '字幕翻译配置'} · ${commentModel.model || '未填写模型名'}`;
   }
 
   // ---------- 场景库 ----------
@@ -473,6 +478,7 @@
     bind();
     providers.render();
     style.bind();
+    textStyle.bind();
     renderScenes();
     renderPreview();
     showPage(location.hash.slice(1));

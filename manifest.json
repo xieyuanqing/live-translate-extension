@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "流译 · YouTube 直播实时翻译与整片字幕",
+  "name": "流译 · YouTube 字幕、弹幕与评论翻译",
   "short_name": "流译",
-  "description": "直播：抓取播放器音频经 Gemini 或千问实时翻译。视频与回放：读取 YouTube 字幕轨，用文字模型整片翻译并缓存。字幕直接叠在播放器里。",
+  "description": "直播翻译音频，视频字幕整片翻译并缓存；YouTube 弹幕、评论翻译，字幕直接叠在播放器里。",
   "version": "0.2.0",
   "permissions": [
     "storage",
@@ -52,6 +52,9 @@
       "matches": [
         "https://www.youtube.com/*"
       ],
+      "exclude_matches": [
+        "https://www.youtube.com/live_chat*"
+      ],
       "world": "MAIN",
       "run_at": "document_start",
       "js": [
@@ -62,12 +65,16 @@
       "matches": [
         "https://www.youtube.com/*"
       ],
+      "exclude_matches": [
+        "https://www.youtube.com/live_chat*"
+      ],
       "run_at": "document_idle",
       "js": [
         "src/common/constants.js",
         "src/common/settings.js",
         "src/common/prompt.js",
         "src/common/live-log.js",
+        "src/common/youtube-text.js",
         "src/audio/pcm16k.js",
         "src/content/gemini-live.js",
         "src/content/qwen-live.js",
@@ -84,10 +91,28 @@
         "src/common/live-context.js",
         "src/subs/cache.js",
         "src/content/video-subs.js",
-        "src/content/main.js"
+        "src/content/main.js",
+        "src/content/youtube-comments.js"
       ],
       "css": [
-        "src/content/caption-layer.css"
+        "src/content/caption-layer.css",
+        "src/content/youtube-text.css"
+      ]
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/live_chat*"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle",
+      "js": [
+        "src/common/constants.js",
+        "src/common/settings.js",
+        "src/common/youtube-text.js",
+        "src/content/youtube-chat.js"
+      ],
+      "css": [
+        "src/content/youtube-text.css"
       ]
     }
   ],

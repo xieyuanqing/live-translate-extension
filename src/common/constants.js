@@ -29,6 +29,22 @@ globalThis.LT = globalThis.LT || {};
     { code: 'detailed', label: '详细调试（含原文、译文和提示词）' },
   ];
 
+  // 评论与聊天共用预设，选择和装饰色分别保存。
+  LT.TEXT_STYLES = [
+    { code: 'plain', label: '原样' },
+    { code: 'textColor', label: '文字颜色' },
+    { code: 'underline', label: '下划线' },
+    { code: 'dotted', label: '点状线' },
+    { code: 'dashed', label: '虚线' },
+    { code: 'wavy', label: '波浪线' },
+    { code: 'highlight', label: '背景高亮' },
+    { code: 'marker', label: '荧光笔' },
+    { code: 'quote', label: '引用' },
+    { code: 'box', label: '边框' },
+    { code: 'bold', label: '加粗' },
+    { code: 'muted', label: '淡化' },
+  ];
+
   // ---------- 语言 ----------
   LT.SOURCE_LANGS = [
     { code: 'ja', label: '日语' },
@@ -121,6 +137,12 @@ globalThis.LT = globalThis.LT || {};
     liveContextProviderId: '', // AI 整理独立选用；首次读取旧设置时保留原来的接口选择
     liveContextTimeoutSeconds: 60, // 包含连接、模型等待和收完整个回答
     debugLogLevel: 'off', // 显式开启后才把直播诊断记录写入本机扩展存储
+    enableChatTranslation: false, // YouTube 聊天：Chrome 本机翻译，单独开关
+    enableCommentTranslation: false, // YouTube 评论：复用字幕文字模型，按需翻译
+    commentTranslationStyle: 'plain',
+    chatTranslationStyle: 'plain',
+    commentTranslationColor: '#3478b8',
+    chatTranslationColor: '#3478b8',
 
     sourceLang: 'ja',
     targetLang: 'zh',
@@ -222,6 +244,11 @@ globalThis.LT = globalThis.LT || {};
     SET_TEMP_CONTEXT: 'lt:set-temp-context',
     QUERY_LIVE_CONTEXT: 'lt:query-live-context',
     PREVIEW_LIVE_CONTEXT: 'lt:preview-live-context',
+    QUERY_TEXT_STATUS: 'lt:query-text-status',
+    TRANSLATE_VISIBLE_COMMENTS: 'lt:translate-visible-comments',
+    CANCEL_COMMENT_TRANSLATION: 'lt:cancel-comment-translation',
+    CHAT_STATUS: 'lt:chat-status',
+    QUERY_CHAT_STATUS: 'lt:query-chat-status',
     // 整片字幕
     VS_START: 'lt:vs-start', // payload: { force?: boolean }
     VS_CANCEL: 'lt:vs-cancel',
