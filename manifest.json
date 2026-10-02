@@ -2,16 +2,22 @@
   "manifest_version": 3,
   "name": "流译 · YouTube 字幕、弹幕与评论翻译",
   "short_name": "流译",
-  "description": "直播翻译音频，视频字幕整片翻译并缓存；YouTube 弹幕、评论翻译，字幕直接叠在播放器里。",
-  "version": "0.2.0",
+  "description": "直播翻译音频，视频字幕整片翻译并缓存；YouTube 弹幕、评论翻译；划词翻译与日英朗读，支持微软和 Gemini 语音。",
+  "version": "0.4.0",
   "permissions": [
     "storage",
     "unlimitedStorage",
-    "declarativeNetRequestWithHostAccess"
+    "declarativeNetRequestWithHostAccess",
+    "contextMenus",
+    "activeTab",
+    "scripting",
+    "offscreen"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "https://dev.microsofttranslator.com/*",
+    "https://*.tts.speech.microsoft.com/*"
   ],
   "optional_host_permissions": [
     "<all_urls>",

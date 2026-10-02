@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.4.0 — unreleased (2026-10-02)
+
+- Add right-click selection translation using the existing subtitle text model and target language, plus reading the original text in Japanese/English. Latin-only letters use English; all other selections use Japanese, including Han-only words. No pronunciation dictionary or separate language-detection model.
+- Add Microsoft consumer Neural speech as the default (Nanami/Jenny) and configurable Gemini TTS as a second provider, with independent keys/models/voices, key reuse, language-specific previews, and three playback speeds. Support legacy PCM-to-WAV output and newer WAV responses. Actual free quota depends on the Gemini project.
+- Add a light/dark panel beside the selected sentence showing original/translation, with manual playback, stop, replay, copy and provider switching. A single **翻译与朗读** menu injects into the selected frame; a restricted frame can use its parent page, without opening another page/window. Reposition for translation height, scrolling and viewport edges. Background synthesis/offscreen playback share one cancellable task, bounded memory cache, stale-result checks and resource cleanup. Pending previews also cancel while settings are still saving.
+- Retain the original MIT core; attribute the Read Frog-derived Microsoft adapter and include its source and GPLv3 license in the repository and runtime package. The combined package is not described as entirely MIT; see `docs/third-party-tts.md`.
+- Syntax/self-tests and all 113 simulated regressions pass, covering language rules, UTF-8 splitting, request schemas/audio formats, key redaction, cancel/replay/navigation races, selected frames, same-page frame fallback, pending settings saves and audio URL release. Real Microsoft Japanese/English synthesis and offscreen playback pass in isolated Chromium. A real AudioTap worklet stays silent while offscreen speech plays with a silent video; offscreen recreation also passes. Gemini/selection-model browser checks use network substitutes; real Gemini synthesis, subjective voice quality and the user's current YouTube integration remain unverified.
+
+## 0.3.5 — unreleased (2026-10-02)
+
+- Fixed black comment translations on dark YouTube pages when the actual source text color is scoped to an inner attributed-string node. Read the original text's computed color instead of relying on a generic YouTube variable inherited by the injected sibling. Theme changes update existing results without new requests, including hidden results.
+- Gave comment actions, status text, focus outlines, and disabled controls explicit readable light/dark colors following YouTube's own theme. The extension popup theme remains independent; custom translation styles are retained.
+- Syntax/self-tests and all 101 simulated regressions pass. Offline Chrome fixtures reproduce the 0.3.4 black-text failure with scoped original colors, then verify 0.3.5 at 1440/390 px under both themes, live theme switching without retranslation, collapsed comments, replies, chat, and all existing appearance presets. Actual user Chrome/YouTube validation remains outstanding.
+
+## 0.3.4 — unreleased (2026-10-02)
+
+- Fixed custom YouTube emote names and hover-tooltip text being treated as message/comment text. Preserve original images and Unicode emoji, ignore custom image names and tooltip DOM, and translate only the actual message. Emote-only messages remain skipped; hovering does not change the translation/cache identity.
+- Fixed the action popup collapsing into a narrow column by setting a 420 px intrinsic root/body width and removing its viewport-dependent maximum. Keep the brand and header controls on one line.
+- Protected pending theme choices from late reads and earlier save events; Settings writes run serially so rapid changes retain the last selection.
+- Added a shared system/light/dark preference to General settings and a popup theme toggle. Dark surfaces use soft neutral grays, readable text, and restrained blue actions. Settings, controls, errors, model cards, and prompts follow the selected theme; webpage translation-style previews remain independent.
+
+- Syntax/self-tests and all 100 simulated regressions pass. Offline Chrome covers eight Settings sections at 1440/1024/390 px, system/manual themes, delayed saves, popup states at 420 px, and image-emote hover filtering with actual content scripts against simulated DOM/models. Real YouTube/native model validation remains outstanding.
+
+## 0.3.3 — unreleased (2026-10-02)
+
+- Redesigned Settings and the extension popup with a shared iOS-inspired light palette, white rounded groups, blue actions, native inputs styled as switches, consistent spacing, and readable warning/error colors. The interface stays light even when the operating system uses dark mode.
+- Added grouped sidebar navigation with icons and retained the narrow-screen scrolling navigation. Updated model cards, text-style choices, segmented controls, prompts, logs, caches, and subtitle preview surfaces to match the light interface. Translation-style previews start with a light webpage; an optional dark webpage sample remains available.
+- Moved popup language choices above the translation action and placed expandable context details after the chat/comment shortcuts. Connection statistics and audio level appear while translation is active, leaving idle controls compact. Existing settings, session behavior, caches, and translation styles are retained.
+- Syntax/self-tests and all 96 simulated regressions pass. Offline Chrome checks cover eight Settings sections at 1440/1024/390 px under light/dark system appearance, all translation-style choices, switch/language saves, and popup live/video/error/no-tab states including context preview, start/stop, and subtitle cancellation. Real YouTube/native model validation remains outstanding.
+
+## 0.3.2 — unreleased (2026-10-02)
+
+- Added 12 translation appearance presets in Settings → chat/comments: plain, text color, underline, dotted, dashed, wavy, highlight, marker, quote, border, bold, and muted. Comments and chat independently save a preset and accent color; existing settings retain the plain appearance.
+- Added visual preset cards, dark/light page previews using the production renderer/CSS, a color picker, and reset for the selected scope, inspired by the preset-and-preview settings in Read Frog and KISS Translator.
+- Changes apply immediately to existing results and subsequent translations without another model call, resetting chat language models, losing collapsed comments, or invalidating prepared live context. The presets retain source typography and paid-message colors except when a text-color or bold/muted preset is explicitly selected.
+- Syntax/self-tests and all 96 simulated regressions pass. Offline Chrome checks cover all presets, independent saves/colors, scope-specific reset, keyboard selection, dark/light previews and 1440/390 px layouts. Runtime checks confirm style changes preserve result text, collapsed comments and model request counts. Real YouTube/native model validation remains outstanding.
+
+
+## 0.3.1 — unreleased (2026-10-02)
+
+- Chat skips emoji-only/image-emote messages, numeric-only spam, laughter (`www`, `草`), and standalone short reactions such as KAWAII, LOL, NT, NICE, and GG before queueing or language detection. Matching ignores case, full-width forms, punctuation, and surrounding emoji; normal sentences containing those words still translate.
+- Reworked comment and chat translation display to follow the original text with matching typography, using the bilingual insertion approach in KISS Translator and Read Frog as a reference. Removed comment result borders, per-result language labels, and boxed translation buttons. Comment actions now follow the translation and include hide/show without another model request.
+- Placed comment results outside YouTube's collapsed-text container. Chat results are plain spans inside their source message, preserving paid/membership colors and avoiding outer flex-layout displacement. Source extraction excludes injected translations and preserves line breaks, link text, and image-emoji alternatives; message redraws can restore cached results.
+- Offline Chrome layout checks cover dark/light themes at 1440/390 px, long comments, expanded replies, paid/membership messages, hide/show, chat redraws/recycled nodes, and replay chat. Reaction tests also confirm filtered messages never reach translation, normal sentences still translate, and recycled rows lose their old translation when replaced with a reaction. Native Chrome translation models and current YouTube DOM compatibility still require real-browser validation.
+- Syntax checks, algorithm self-tests, and all 94 simulated regressions pass. The runtime ZIP and stable unpacked loading directory contain the updated 0.3.1 source; preview/test data are excluded.
+
+## 0.3.0 — unreleased (2026-10-01)
+
+- Refreshed Settings with a clearer sidebar, section headings, softer dark colors, consistent controls and spacing, and two prominent model-role selectors. Offline browser checks cover all eight sections at desktop and narrow widths, independent model saves, feature switches, and popup startup; real YouTube/model testing remains outstanding.
+- Added independently enabled YouTube chat and comment translation, both off by default. Chat uses Chrome's local Translator API with language-pack preparation, optional language detection, a bounded queue, and translations below the original message. Comments and expanded replies use the subtitle text model on individual clicks or for currently visible comments, validate the complete numbered response, and support cancellation and page-memory reuse. Settings and the popup expose both switches. Automated checks passed; actual chat API availability and live comment translation require real-browser validation.
+- Removed scene-template selection from live translation and scene text from Gemini live prompts. Combined temporary notes with the stream-context viewer, and replaced the scene statistic with actual context/term status. Existing scene preferences remain under advanced whole-video subtitle settings.
+- Separated AI context-generation and whole-video subtitle model selections. Both use OpenAI-compatible chat/completions or Gemini endpoints; new configurations default to OpenAI-compatible format and existing API types are preserved. Replaced the context generator's eight-second abort with a configurable 30/60/120-second deadline (60 by default), and added the actual generator model, deadline, and error to its review and diagnostics.
+- Added a popup viewer for pre-session generator inputs/results and the exact frozen Gemini prompt or Qwen translation configuration, with copy support. A pre-start preview captures no audio and is reused once if its inputs match; input changes and navigation invalidate it. Saved detailed logs also expose a prompt viewer.
+- Prioritized verified streamer names/readings and current-stream terms in context generation, reserving a term slot for the channel name when identifiable. This is a terminology safeguard, not a claim of improved recognition accuracy.
+- Fixed Qwen's 120-second rotation referencing an undefined socket: send `session.finish`, accept tail results, and wait up to three seconds before replacing the connection. Qwen captions now preserve legitimate repetitions and deduplicate by protocol identifiers instead of guessing text overlap; Gemini retains its existing stabilizer behavior.
+- Added generator input, playback position, Qwen event/output identifiers, close reasons, and sent/queued/dropped audio counts to diagnostic logs. Added simulated preview-reuse/cancellation, rotation-tail, and repetition regressions; live model quality still requires fresh stream validation.
+
+- Added a live-model selector. Gemini 3.5 remains the default; Qwen 3.8 LiveTranslate uses its Bailian workspace WebSocket, text-only output, source transcription, and optional terminology pairs. The existing whole-video caption mode is unchanged.
+- Added an optional pre-session text-model request that condenses the current video's title and description into short context and up to 12 candidate terms. Gemini receives the result in its session prompt; Qwen receives only its supported term mappings. Failed or unavailable requests do not prevent a live session from starting.
+- Qwen WebSocket authentication uses an optional Chrome host permission and a temporary, tab- and URL-scoped request-header rule. The rule is removed after handshake, on cancellation, and after a service-worker restart.
+- Tightened the Gemini live prompt to preserve speakers, questions, negation, and uncertain proper names. Added simulated protocol, authorization, and session-cancellation regressions; these do not establish real-browser quality or sustained upstream availability.
+- Added opt-in live diagnostic logs with basic state/timing mode and detailed prompt/transcription/translation mode. Logs are saved per session in local extension storage, bounded to 3,000 events and the 20 most recent completed sessions, redact configured API keys, and can be exported per session or in bulk from Settings. Raw audio is not recorded.
+
 ## 0.2.0 — unreleased (updated 2026-09-19)
 
 ### Whole-video subtitles

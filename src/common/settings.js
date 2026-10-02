@@ -41,6 +41,16 @@ globalThis.LT = globalThis.LT || {};
     s.generateLiveContext = s.generateLiveContext !== false;
     s.enableChatTranslation = s.enableChatTranslation === true;
     s.enableCommentTranslation = s.enableCommentTranslation === true;
+    s.ttsProvider = s.ttsProvider === 'gemini' ? 'gemini' : 'microsoft';
+    s.ttsGeminiReuseKey = s.ttsGeminiReuseKey !== false;
+    s.ttsGeminiApiKey = String(s.ttsGeminiApiKey || '').trim();
+    s.ttsGeminiBaseUrl = String(s.ttsGeminiBaseUrl || LT.DEFAULTS.ttsGeminiBaseUrl).trim().replace(/\/+$/, '');
+    s.ttsGeminiModel = String(s.ttsGeminiModel || LT.DEFAULTS.ttsGeminiModel).trim().replace(/^models\//, '');
+    s.ttsGeminiVoice = /^[A-Za-z]{2,30}$/.test(s.ttsGeminiVoice || '') ? s.ttsGeminiVoice : 'Kore';
+    for (const [field, prefix] of [['ttsMicrosoftJaVoice', 'ja-JP'], ['ttsMicrosoftEnVoice', 'en-US']]) {
+      if (!new RegExp(`^${prefix}-[A-Za-z]+Neural$`).test(s[field] || '')) s[field] = LT.DEFAULTS[field];
+    }
+    s.ttsRate = clamp(Number(s.ttsRate) || 1, 0.75, 1.25);
     for (const scope of ['comment', 'chat']) {
       const styleKey = `${scope}TranslationStyle`, colorKey = `${scope}TranslationColor`;
       if (!LT.TEXT_STYLES.some(style => style.code === s[styleKey])) s[styleKey] = LT.DEFAULTS[styleKey];

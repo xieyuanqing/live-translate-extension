@@ -1,9 +1,9 @@
 {
   "name": "live-translate-extension",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "Live audio translation, whole-video subtitle translation, and in-player captions for YouTube.",
-  "license": "MIT",
+  "description": "YouTube subtitles, local chat and on-demand text translation, plus Japanese/English reading with Microsoft and Gemini TTS.",
+  "license": "SEE LICENSE IN docs/third-party-tts.md",
   "repository": {
     "type": "git",
     "url": "https://github.com/xieyuanqing/live-translate-extension.git"

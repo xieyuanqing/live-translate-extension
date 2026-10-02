@@ -11,12 +11,13 @@
   let saveQueue = Promise.resolve();
   let pendingThemeRevision = null;
 
-  const PAGES = ['general', 'live', 'video', 'text', 'models', 'style', 'data', 'about'];
+  const PAGES = ['general', 'live', 'video', 'text', 'speech', 'models', 'style', 'data', 'about'];
   const PAGE_INFO = {
     general: ['语言与背景', '设定翻译方向，补充常用的人名与背景。'],
     live: ['实时翻译', '选择直播模型，设置开播前的背景与术语整理。'],
     video: ['整片字幕', '读取视频字幕，翻译后保存在本机，方便下次观看。'],
     text: ['弹幕与评论', '聊天自动翻译，评论按需翻译；两项分别开启。'],
+    speech: ['朗读', '选中文字后右键打开原文与译文，点击播放读日语或英语。'],
     models: ['文字模型', '整理用轻量模型，字幕与评论用更强的模型，分别选择。'],
     style: ['字幕外观', '调整双语显示、字体与颜色，直接查看预览效果。'],
     data: ['数据管理', '查看诊断日志、管理字幕缓存，备份你的设置。'],
@@ -176,6 +177,11 @@
   });
   const style = LT.OptionsUI.mountStyle({ $, settings: () => settings, save: queueSave });
   const textStyle = LT.OptionsUI.mountTextStyle({ $, settings: () => settings, save: queueSave });
+  const speech = LT.OptionsUI.mountSpeech({ $, settings: () => settings, save: queueSave, flush: async () => {
+    clearTimeout(saveTimer);
+    await saveQueue;
+    await LT.Settings.save({ ...settings });
+  } });
   const dataUI = LT.OptionsUI.mountData({
     $,
     settings: () => settings,
@@ -479,6 +485,7 @@
     providers.render();
     style.bind();
     textStyle.bind();
+    speech.bind();
     renderScenes();
     renderPreview();
     showPage(location.hash.slice(1));

@@ -22,6 +22,7 @@ globalThis.LT = globalThis.LT || {};
     if (!includeKeys) {
       copy.apiKeys = '';
       copy.qwenApiKey = '';
+      copy.ttsGeminiApiKey = '';
       for (const p of copy.providers) p.apiKey = '';
     }
     return { app: APP, version, exportedAt: new Date().toISOString(), includesKeys: !!includeKeys, settings: copy };
@@ -36,6 +37,7 @@ globalThis.LT = globalThis.LT || {};
     if (!raw.includesKeys) {
       next.apiKeys = current.apiKeys;
       next.qwenApiKey = current.qwenApiKey;
+      next.ttsGeminiApiKey = current.ttsGeminiApiKey;
       for (const p of next.providers) {
         if (p.apiKey) continue;
         const own = (current.providers || []).find((q) => q.id === p.id);
@@ -220,6 +222,7 @@ globalThis.LT = globalThis.LT || {};
       if (keep) {
         next.apiKeys = current.apiKeys;
         next.qwenApiKey = current.qwenApiKey;
+        next.ttsGeminiApiKey = current.ttsGeminiApiKey;
         next.providers = JSON.parse(JSON.stringify(current.providers));
         next.subsProviderId = current.subsProviderId;
       }

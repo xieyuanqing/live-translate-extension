@@ -1,11 +1,13 @@
 /**
  * Service Worker：首次写入默认设置、维护标签页角标、转发快捷键，以及替内容脚本转发
  * 文字模型请求（第三方接口不放行跨域时用）。
- * MV3 的 SW 随时会被杀掉，所以这里不保存任何会话状态，会话完全活在内容脚本里。
+ * 直播会话在内容脚本中；划词任务独立放在 selection.js，由客户端/播放器心跳维持并处理取消。
  */
-importScripts('/src/common/constants.js', '/src/common/settings.js');
+importScripts('/src/common/constants.js', '/src/common/settings.js', '/src/common/selection.js',
+  '/src/subs/net.js', '/src/subs/text-model.js', '/src/tts/audio.js', '/src/tts/microsoft.js', '/src/tts/gemini.js');
 
 const LT = globalThis.LT;
+importScripts('/src/background/selection.js');
 const QWEN_RULE_MIN = 1000000000;
 const QWEN_RULE_MAX = 1500000000;
 const qwenRules = new Set();

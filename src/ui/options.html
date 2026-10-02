@@ -28,6 +28,7 @@
         <a href="#video"><span class="nav-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m10 8 6 4-6 4z" /></svg></span>整片字幕</a>
         <a href="#text"><span class="nav-icon orange" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 14a3 3 0 0 1-3 3H9l-5 4V7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3zM8 9h8M8 13h5" /></svg></span>弹幕与评论</a>
         <a href="#models"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="3" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3M10 10h4v4h-4z" /></svg></span>文字模型</a>
+        <a href="#speech"><span class="nav-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m4 9 5 0 5-4v14l-5-4H4zM18 8c3 2 3 6 0 8" /></svg></span>朗读</a>
         <span class="nav-label">偏好设置</span>
         <a href="#style"><span class="nav-icon pink" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m10 14 9-11 2 2-9 11M10 14c-4-2-4 2-5 4l-2 2c6 1 9-1 7-6z" /></svg></span>字幕外观</a>
         <a href="#data"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="14" rx="2" /><path d="M3 3h18v4H3zM9 11h6" /></svg></span>数据</a>
@@ -81,6 +82,39 @@
             <p class="muted small">
               标题和简介会作为不可信资料交给模型，提示词会提醒模型只参考资料、不执行其中的指令，但无法保证绝对有效。
             </p>
+          </section>
+        </section>
+
+        <section class="page" data-page="speech">
+          <section class="card">
+            <h2>朗读供应商</h2>
+            <div class="field"><label class="label" for="ttsProvider">使用的接口</label><select id="ttsProvider"></select></div>
+            <p class="muted small">只使用日语和英语：忽略数字、空格和标点后，纯拉丁字母读英语，其余读日语。朗读原文，不先翻译。</p>
+            <div id="ttsMicrosoftFields">
+              <div class="two">
+                <div class="field"><label class="label" for="ttsMicrosoftJaVoice">日语音色</label><select id="ttsMicrosoftJaVoice"></select></div>
+                <div class="field"><label class="label" for="ttsMicrosoftEnVoice">英语音色</label><select id="ttsMicrosoftEnVoice"></select></div>
+              </div>
+              <p class="muted small">无需客户 Key。使用微软消费者语音接口；遇到连接问题可切换 Gemini。</p>
+            </div>
+            <div id="ttsGeminiFields" hidden>
+              <label class="check"><input type="checkbox" id="ttsGeminiReuseKey"><span>复用已有 Gemini Key<br><span class="muted small">优先实时翻译的 Key，再选有 Key 的 Gemini 文字接口</span></span></label>
+              <div class="field"><label class="label" for="ttsGeminiApiKey">独立 Gemini API Key</label><input type="password" id="ttsGeminiApiKey" autocomplete="off"></div>
+              <div class="field"><label class="label" for="ttsGeminiBaseUrl">接口地址</label><input type="text" id="ttsGeminiBaseUrl" spellcheck="false"></div>
+              <div class="row"><button id="ttsGrantGemini">授权访问此域名</button><span id="ttsPermissionState" class="muted small"></span></div>
+              <div class="two">
+                <div class="field"><label class="label" for="ttsGeminiModel">TTS 模型</label><input type="text" id="ttsGeminiModel" list="ttsModelChoices" spellcheck="false"><datalist id="ttsModelChoices"><option value="gemini-3.1-flash-tts-preview"><option value="gemini-3.8-flash-lite-tts"><option value="gemini-3.8-flash-tts"></datalist></div>
+                <div class="field"><label class="label" for="ttsGeminiVoice">音色</label><select id="ttsGeminiVoice"></select></div>
+              </div>
+              <p class="muted small">免费额度以 AI Studio 项目实际限制为准；3.1 是旧预览版，可改为账号支持的新型号。</p>
+            </div>
+          </section>
+          <section class="card">
+            <h2>试听与语速</h2>
+            <div class="field"><label class="label" for="ttsRate">默认语速</label><select id="ttsRate"></select></div>
+            <div class="row"><button id="ttsPreviewJa">试听日语</button><button id="ttsPreviewEn">试听英语</button><button id="ttsStopPreview" disabled>停止</button></div>
+            <p id="ttsPreviewState" role="status" class="muted small"></p>
+            <p class="muted small">选中的原文会发送到所选语音供应商。Key 明文保存在本机扩展存储；语音只短暂保留在内存中。</p>
           </section>
         </section>
 
@@ -498,6 +532,7 @@
 
     <script src="../common/constants.js"></script>
     <script src="../common/settings.js"></script>
+    <script src="../common/selection.js"></script>
     <script src="theme.js"></script>
     <script src="../common/youtube-text.js"></script>
     <script src="../common/prompt.js"></script>
@@ -510,6 +545,7 @@
     <script src="options-style.js"></script>
     <script src="options-text-style.js"></script>
     <script src="options-data.js"></script>
+    <script src="options-tts.js"></script>
     <script src="options.js"></script>
   </body>
 </html>
