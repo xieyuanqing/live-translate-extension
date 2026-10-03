@@ -1,5 +1,5 @@
 /**
- * 设置页总控：分区导航、简单字段绑定、场景库、提示词预览、字幕缓存。
+ * 设置页总控：分区导航、字段绑定、翻译偏好、提示词预览与配置引导。
  * 文字模型卡片、字幕外观预览、导入导出分别在 options-providers.js / options-style.js / options-data.js。
  */
 (() => {
@@ -10,18 +10,21 @@
   let saveTimer = null;
   let saveQueue = Promise.resolve();
   let pendingThemeRevision = null;
+  let currentPage = 'general', appearanceTab = 'caption', setupRevision = 0;
+  let expandedLiveProvider = '', expandedSpeechProvider = '';
+  const testedProviders = new Map();
 
   const PAGES = ['general', 'live', 'video', 'text', 'speech', 'models', 'style', 'data', 'about'];
   const PAGE_INFO = {
     general: ['语言与背景', '设定翻译方向，补充常用的人名与背景。'],
-    live: ['实时翻译', '选择直播模型，设置开播前的背景与术语整理。'],
+    live: ['实时翻译', '选择直播接口，设置开播前的背景与术语整理。'],
     video: ['整片字幕', '读取视频字幕，翻译后保存在本机，方便下次观看。'],
-    text: ['弹幕与评论', '聊天自动翻译，评论按需翻译；两项分别开启。'],
-    speech: ['朗读', '选中文字后右键打开原文与译文，点击播放读日语或英语。'],
-    models: ['文字模型', '整理用轻量模型，字幕与评论用更强的模型，分别选择。'],
-    style: ['字幕外观', '调整双语显示、字体与颜色，直接查看预览效果。'],
-    data: ['数据管理', '查看诊断日志、管理字幕缓存，备份你的设置。'],
-    about: ['关于流译', '版本信息、快捷键与诊断说明。'],
+    text: ['聊天与评论', '聊天使用本地翻译，评论按需调用所选接口。'],
+    speech: ['划词与朗读', '选择划词翻译和原文朗读接口，调整音色与语速。'],
+    models: ['接口', ''],
+    style: ['外观', '设置界面主题、字幕和评论／聊天译文的样式。'],
+    data: ['数据与备份', '管理字幕缓存，导入或导出设置。'],
+    about: ['高级与关于', '查看提示词、诊断日志和版本信息。'],
   };
   const PAGE_KEY = 'lt-options-page';
   const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'qwenWorkspaceHost', 'qwenApiKey', 'manualContext', 'subsExtraInstruction'];
@@ -42,8 +45,10 @@
     ],
   };
   const PROVIDER_SELECTS = {
-    liveContextProviderId: 'liveContextProviderId', modelContextProviderId: 'liveContextProviderId',
-    subsProviderId: 'subsProviderId', modelSubsProviderId: 'subsProviderId',
+    modelContextProviderId: 'liveContextProviderId',
+    modelSubsProviderId: 'subsProviderId',
+    modelSelectionProviderId: 'selectionProviderId',
+    modelCommentProviderId: 'commentProviderId',
   };
   const CHECK_FIELDS = ['autoStartLive', 'pauseOnAd', 'useMetadata', 'echoTargetLanguage', 'generateLiveContext',
     'autoShowCached', 'enableChatTranslation', 'enableCommentTranslation'];
@@ -83,6 +88,7 @@
     renderLiveProvider();
     renderPreview();
     renderProviderSelect();
+    renderSetup();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       const snapshot = { ...settings };
@@ -115,18 +121,18 @@
   }
 
   function renderLiveProvider() {
-    $('geminiLiveFields').classList.toggle('hidden', settings.liveProvider === 'qwen');
-    $('qwenLiveFields').classList.toggle('hidden', settings.liveProvider !== 'qwen');
     $('geminiPromptPreview').classList.toggle('hidden', settings.liveProvider === 'qwen');
-  }
-
-  async function refreshQwenPermission() {
-    try {
-      const allowed = await chrome.permissions.contains({ origins: ['<all_urls>'] });
-      $('qwenPermissionState').textContent = allowed ? '已授权，可连接千问。' : '尚未授权，千问连接不能启动。';
-      $('grantQwenAccess').disabled = allowed;
-    } catch (_) {
-      $('qwenPermissionState').textContent = '此预览环境无法检查 Chrome 权限。';
+    $('qwenModeHint').classList.toggle('hidden', settings.liveProvider !== 'qwen');
+    $('liveServiceSummary').textContent = LT.LIVE_PROVIDERS.find(provider => provider.code === settings.liveProvider)?.label || '';
+    // 首次显示和切换用途时展开当前接口；编辑备用接口不会切换功能选用。
+    if (expandedLiveProvider !== settings.liveProvider) {
+      expandedLiveProvider = settings.liveProvider;
+      $('geminiLiveFields').open = settings.liveProvider === 'gemini';
+      $('qwenLiveFields').open = settings.liveProvider === 'qwen';
+    }
+    if (expandedSpeechProvider !== settings.ttsProvider) {
+      expandedSpeechProvider = settings.ttsProvider;
+      $('geminiSpeechConfig').open = settings.ttsProvider === 'gemini';
     }
   }
 
@@ -141,18 +147,21 @@
   // ---------- 分区导航 ----------
 
   function showPage(name) {
-    let page = name;
+    let [page, serviceTab] = name.split('/');
     if (!PAGES.includes(page)) {
       try {
-        page = localStorage.getItem(PAGE_KEY) || 'general';
+        page = localStorage.getItem(PAGE_KEY) || 'models';
       } catch (_) {
-        page = 'general';
+        page = 'models';
       }
-      if (!PAGES.includes(page)) page = 'general';
+      if (!PAGES.includes(page)) page = 'models';
     }
     for (const el of document.querySelectorAll('.page')) el.classList.toggle('active', el.dataset.page === page);
     $('pageTitle').textContent = PAGE_INFO[page][0];
     $('pageDescription').textContent = PAGE_INFO[page][1];
+    $('pageDescription').hidden = !PAGE_INFO[page][1];
+    currentPage = page;
+    $('mobilePageSelect').value = page;
     for (const a of document.querySelectorAll('.nav a')) {
       if (a.getAttribute('href') === `#${page}`) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
@@ -162,18 +171,57 @@
     } catch (_) {
       /* 无痕模式等 */
     }
-    if (page === 'style') style.refresh(); // 隐藏时容器宽度为 0，显示后重算字号
-    if (page === 'text') textStyle.refresh();
-    if (page === 'data') { renderCache(); dataUI.refreshLogs(); }
+    if (page === 'style') showAppearance(appearanceTab); // 隐藏时容器宽度为 0，显示后重算字号
+    if (page === 'data') renderCache();
+    if (page === 'about') dataUI.refreshLogs();
+    if (page === 'models') {
+      if (!['text', 'live', 'speech'].includes(serviceTab)) serviceTab = 'text';
+      for (const panel of document.querySelectorAll('[data-service-panel]')) panel.hidden = panel.dataset.servicePanel !== serviceTab;
+      for (const tab of document.querySelectorAll('[data-service-tab]')) {
+        if (tab.dataset.serviceTab === serviceTab) tab.setAttribute('aria-current', 'true');
+        else tab.removeAttribute('aria-current');
+      }
+    }
+    renderSetup();
+  }
+
+  function showAppearance(name) {
+    appearanceTab = ['caption', 'comment', 'chat'].includes(name) ? name : 'caption';
+    for (const button of $('appearanceTabs').querySelectorAll('[data-appearance-tab]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.appearanceTab === appearanceTab));
+    }
+    for (const panel of document.querySelectorAll('[data-appearance-panel]')) {
+      panel.hidden = panel.dataset.appearancePanel !== (appearanceTab === 'caption' ? 'caption' : 'text');
+    }
+    if (appearanceTab === 'caption') style.refresh();
+    else textStyle.selectScope(appearanceTab);
   }
 
   // ---------- 子模块 ----------
 
   const providers = LT.OptionsUI.mountProviders({
     box: $('providers'),
+    list: $('providerList'),
+    picker: $('providerPicker'),
     settings: () => settings,
     save: () => queueSave({}),
-    select: (id, field = 'subsProviderId') => queueSave({ [field]: id }),
+    onTest: ({ providerId, signature, settingsSignature, ok }) => {
+      // 迟到的生成结果只能验证实际使用过的配置，不能把后来编辑的地址或模型标为通过。
+      try {
+        const snapshot = LT.Settings.normalize(settings);
+        if (settingsSignature !== LT.OptionsUI.providerSignature(snapshot, providerId)) return;
+        const actual = JSON.parse(signature), current = LT.TextModel.resolve(snapshot, providerId);
+        const provider = snapshot.providers.find(p => p.id === providerId);
+        if (!provider) return;
+        const keys = provider.apiKey ? [provider.apiKey] : LT.Settings.keyList(snapshot);
+        const actualKey = actual.key;
+        delete actual.key; delete current.key;
+        if (!keys.includes(actualKey) || JSON.stringify(actual) !== JSON.stringify(current)) return;
+        if (ok) testedProviders.set(providerId, LT.OptionsUI.providerSignature(snapshot, providerId));
+        else testedProviders.delete(providerId);
+        renderSetup();
+      } catch (_) { /* 已作废的测试结果 */ }
+    },
   });
   const style = LT.OptionsUI.mountStyle({ $, settings: () => settings, save: queueSave });
   const textStyle = LT.OptionsUI.mountTextStyle({ $, settings: () => settings, save: queueSave });
@@ -189,7 +237,7 @@
     version: chrome.runtime.getManifest().version,
   });
 
-  // ---------- AI 整理与字幕翻译：分别选用接口配置 ----------
+  // ---------- 各功能分别选用接口配置 ----------
 
   function renderProviderSelect() {
     for (const [id, field] of Object.entries(PROVIDER_SELECTS)) {
@@ -198,14 +246,82 @@
       for (const p of settings.providers) {
         const opt = document.createElement('option');
         opt.value = p.id;
-        const name = p.name || (LT.TEXT_API_TYPES.find((t) => t.code === p.apiType) || {}).label || p.apiType;
+        const name = p.name || (p.apiType === 'gemini' ? 'Gemini' : 'OpenAI 兼容');
         opt.textContent = `${name} · ${p.model || '未填写模型名'}`;
         el.appendChild(opt);
       }
       el.value = settings[field];
+      el.title = el.selectedOptions[0]?.textContent || '';
     }
-    const commentModel = LT.Settings.provider(settings);
-    $('commentModelSummary').textContent = `${commentModel.name || '字幕翻译配置'} · ${commentModel.model || '未填写模型名'}`;
+  }
+
+  async function renderSetup() {
+    const revision = ++setupRevision;
+    const snapshot = LT.Settings.normalize(settings);
+    const describe = LT.OptionsUI.connectionState;
+    const checks = new Map();
+    async function permission(state) {
+      if (!state.complete || !state.origins.length) return state;
+      const key = JSON.stringify(state.origins);
+      if (!checks.has(key)) checks.set(key, chrome.permissions.contains({ origins: state.origins }).catch(() => false));
+      return { ...state, authorized: await checks.get(key) };
+    }
+    const purposes = [
+      ['liveSetupState', '实时翻译', describe(snapshot, 'live')],
+      ['contextSetupState', 'AI 整理', describe(snapshot, 'text', snapshot.liveContextProviderId), snapshot.liveContextProviderId],
+      ['subsSetupState', '整片字幕', describe(snapshot, 'text', snapshot.subsProviderId), snapshot.subsProviderId],
+      ['selectionSetupState', '划词翻译', describe(snapshot, 'text', snapshot.selectionProviderId), snapshot.selectionProviderId],
+      ['commentSetupState', '评论翻译', describe(snapshot, 'text', snapshot.commentProviderId), snapshot.commentProviderId],
+      ['speechSetupState', '原文朗读', describe(snapshot, 'speech')],
+    ];
+    const states = await Promise.all(purposes.map(async ([id, label, state, providerId]) => [id, label, await permission(state), providerId]));
+    const allText = await Promise.all(snapshot.providers.map(p => permission(describe(snapshot, 'text', p.id))));
+    if (revision !== setupRevision) return;
+    const editingId = $('providerPicker').value;
+    const editingIndex = snapshot.providers.findIndex(p => p.id === editingId);
+    if (editingIndex >= 0) states.push(['providerSetupState', '当前接口', allText[editingIndex], editingId]);
+    const ready = state => state.complete && state.authorized !== false;
+    for (const [id, label, state, providerId] of states) {
+      const node = $(id);
+      node.replaceChildren();
+      if (id === 'providerSetupState') {
+        const tested = testedProviders.get(providerId) === LT.OptionsUI.providerSignature(snapshot, providerId);
+        node.textContent = !state.complete ? `当前接口尚缺${state.missing.join('、')}。`
+          : tested ? '本次生成测试通过。' : '配置已填写，生成测试可验证实际可用性。';
+        node.dataset.state = !state.complete ? 'missing' : tested ? 'tested' : 'ready';
+        continue;
+      }
+      const message = !state.complete ? `尚缺${state.missing.join('、')}` : state.authorized === false ? '尚需浏览器授权'
+        : providerId && testedProviders.get(providerId) === LT.OptionsUI.providerSignature(snapshot, providerId) ? '本次生成测试通过'
+        : id === 'speechSetupState' && snapshot.ttsProvider === 'microsoft' ? '微软接口无需 Key，可直接试听' : '已配置，实际可用性需测试';
+      node.textContent = `${label}：${message}`;
+      node.dataset.state = !ready(state) ? 'missing' : message === '本次生成测试通过' ? 'tested' : 'ready';
+      if (!ready(state)) {
+        const link = document.createElement('a'); link.href = state.route; link.textContent = '去配置';
+        link.addEventListener('click', () => { if (providerId) providers.edit(providerId); });
+        node.append(' · ', link);
+      }
+    }
+    const live = states[0][2], text = states[2][2], selection = states[3][2], comment = states[4][2], speechState = states[5][2];
+    let required = null, message = '';
+    if (currentPage === 'live' && !ready(live)) { required = live; message = '实时翻译接口尚未配置完成。'; }
+    if (currentPage === 'video' && !ready(text)) { required = text; message = '整片字幕接口尚未配置完成。'; }
+    if (currentPage === 'text' && snapshot.enableCommentTranslation && !ready(comment)) { required = comment; message = '评论接口尚未配置完成；本地聊天翻译不受影响。'; }
+    if (currentPage === 'speech' && (!ready(selection) || !ready(speechState))) {
+      required = !ready(selection) ? selection : speechState;
+      message = !ready(selection) ? '划词翻译接口尚未配置完成。' : '朗读接口尚未配置完成。';
+    }
+    if (!required && !ready(live) && !allText.some(ready) && ['general', 'models'].includes(currentPage)) {
+      required = currentPage === 'models' && location.hash === '#models/live' ? live : text;
+      message = '先配置一个翻译接口，再到 YouTube 打开流译开始翻译。';
+    }
+    $('setupBanner').hidden = !required;
+    $('setupMessage').textContent = message;
+    $('setupLink').href = required?.route || '#models/text';
+    $('setupLink').onclick = () => {
+      const purpose = currentPage === 'text' ? snapshot.commentProviderId : currentPage === 'speech' ? snapshot.selectionProviderId : snapshot.subsProviderId;
+      if (required?.route === '#models/text') providers.edit(purpose);
+    };
   }
 
   // ---------- 场景库 ----------
@@ -225,7 +341,8 @@
       const name = document.createElement('input');
       name.type = 'text';
       name.value = scene.label;
-      name.placeholder = '场景名称';
+      name.placeholder = '翻译偏好名称';
+      name.setAttribute('aria-label', '翻译偏好名称');
       // 按 ID 原位更新，不重排、不新建条目
       name.addEventListener('input', () => {
         scene.label = name.value;
@@ -254,7 +371,7 @@
       del.textContent = '删除';
       del.disabled = settings.scenes.length <= 1;
       del.addEventListener('click', () => {
-        if (!confirm(`确定删除场景「${scene.label}」？`)) return;
+        if (!confirm(`确定删除翻译偏好「${scene.label}」？`)) return;
         settings.scenes = settings.scenes.filter((s) => s.id !== scene.id);
         if (settings.sceneId === scene.id) settings.sceneId = settings.scenes[0].id;
         queueSave({});
@@ -265,7 +382,8 @@
       const instr = document.createElement('textarea');
       instr.rows = 3;
       instr.value = scene.instruction;
-      instr.placeholder = '这个场景要告诉模型什么（口吻、术语、专名处理…）';
+      instr.placeholder = '翻译口吻、术语和专名处理…';
+      instr.setAttribute('aria-label', '翻译偏好指令');
       instr.addEventListener('input', () => {
         scene.instruction = instr.value;
         queueSave({});
@@ -405,13 +523,8 @@
       el.addEventListener('change', () => queueSave({ [id]: el.value }));
     }
     renderLiveProvider();
-    $('grantQwenAccess').addEventListener('click', async () => {
-      try {
-        await chrome.permissions.request({ origins: ['<all_urls>'] });
-      } catch (_) { /* 用户拒绝授权，下面按实际状态显示 */ }
-      refreshQwenPermission();
-    });
-    refreshQwenPermission();
+    LT.OptionsUI.mountHostAccess({ container: $('qwenAccess'), buttonId: 'grantQwenAccess', statusId: 'qwenPermissionState',
+      getTarget: () => ({ origins: ['<all_urls>'], label: 'Chrome 所有网站权限（用于千问连接认证）', scopeLabel: '所有网站权限', button: '授权', missingText: '请先授权，再启动千问直播翻译。' }) });
 
     for (const id of CHECK_FIELDS) {
       const el = $(id);
@@ -441,15 +554,16 @@
     }
 
     $('addProvider').addEventListener('click', () => {
-      settings.providers.push(LT.Settings.newProvider({}));
+      const provider = LT.Settings.newProvider({});
+      settings.providers.push(provider);
       queueSave({});
-      providers.render();
+      providers.render(provider.id);
     });
 
     $('addScene').addEventListener('click', () => {
       settings.scenes.push({
         id: `custom-${Date.now()}`,
-        label: '新场景',
+        label: '新翻译偏好',
         instruction: '',
       });
       queueSave({});
@@ -457,7 +571,7 @@
     });
 
     $('resetScenes').addEventListener('click', () => {
-      if (!confirm('恢复默认场景模板？你自己加的场景会被清掉。')) return;
+      if (!confirm('恢复默认翻译偏好？你自己添加的偏好会被清掉。')) return;
       settings.scenes = JSON.parse(JSON.stringify(LT.DEFAULT_SCENES));
       settings.sceneId = settings.scenes[0].id;
       queueSave({});
@@ -477,6 +591,14 @@
     });
 
     window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
+    $('mobilePageSelect').addEventListener('change', event => { location.hash = event.target.value; });
+    $('providerPicker').addEventListener('change', renderSetup);
+    $('providerList').addEventListener('click', renderSetup);
+    for (const button of $('appearanceTabs').querySelectorAll('[data-appearance-tab]')) {
+      button.addEventListener('click', () => showAppearance(button.dataset.appearanceTab));
+    }
+    for (const event of [chrome.permissions.onAdded, chrome.permissions.onRemoved]) event?.addListener(renderSetup);
+    window.addEventListener('focus', renderSetup);
   }
 
   (async () => {

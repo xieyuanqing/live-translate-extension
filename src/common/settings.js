@@ -85,6 +85,8 @@ globalThis.LT = globalThis.LT || {};
     if (!s.providers.some((p) => p.id === s.subsProviderId)) s.subsProviderId = s.providers[0].id;
     if (!s.selectionProviderId) s.selectionProviderId = s.subsProviderId;
     if (!s.providers.some((p) => p.id === s.selectionProviderId)) s.selectionProviderId = s.providers[0].id;
+    if (!s.commentProviderId) s.commentProviderId = s.subsProviderId;
+    if (!s.providers.some((p) => p.id === s.commentProviderId)) s.commentProviderId = s.providers[0].id;
     // 旧设置首次沿用原选择，保存后两种用途各自保管 id，切换字幕模型不再连带切换整理模型。
     if (!s.liveContextProviderId) s.liveContextProviderId = s.subsProviderId;
     if (!s.providers.some((p) => p.id === s.liveContextProviderId)) s.liveContextProviderId = s.providers[0].id;
@@ -94,6 +96,13 @@ globalThis.LT = globalThis.LT || {};
   LT.Settings = {
     normalize,
     normalizeProvider,
+
+    /** HTTP 接口的 Chrome 主机权限不包含端口；设置授权、后台检查必须使用同一模式。 */
+    hostPattern(value) {
+      const url = new URL(value);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('接口地址需使用 https://；本地网关也可使用 http://');
+      return `${url.protocol}//${url.hostname}/*`;
+    },
 
     async load() {
       const box = await chrome.storage.local.get(KEY);

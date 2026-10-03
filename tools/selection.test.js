@@ -158,6 +158,21 @@ test('划词切换目标语言时按请求冻结语言，无效语言不会进�
   assert.match(port.replies.at(-1).error, /目标语言无效/);
 });
 
+test('带端口的本地接口在划词翻译和 Gemini 朗读后台使用与设置页相同的域名权限', async () => {
+  const checked = [];
+  const h = tasks({ customSettings: { ttsProvider: 'gemini', ttsGeminiReuseKey: false,
+    ttsGeminiApiKey: 'mock-key', ttsGeminiBaseUrl: 'http://127.0.0.1:23000' },
+    translateResolve: () => ({ key: 'mock-key', model: 'mock-model', baseUrl: 'http://127.0.0.1:23000/v1' }),
+    permissionContains: async ({ origins }) => { checked.push(origins[0]); return origins[0] === 'http://127.0.0.1/*'; } });
+  h.ctx.LT.GeminiTTS.synthesize = async () => ({ bytes: Uint8Array.from([1, 2, 3]), mime: 'audio/mpeg' });
+  const p = h.port();
+  p.receive({ type: 'translate', text: '東京', requestId: 71 });
+  await waitFor(() => p.replies.some(item => item.type === 'translation' && item.requestId === 71), '本地接口翻译应完成');
+  assert.equal(p.replies.at(-1).text, '译文');
+  p.receive({ type: 'speak', text: '東京', requestId: 72 });
+  await waitFor(() => h.commands.some(item => item.command === 'play'), '本地 Gemini 接口应进入播放');
+  assert.deepEqual(checked, ['http://127.0.0.1/*', 'http://127.0.0.1/*']);
+});
 test('准备时停止，迟到的设置和合成结果不能开始播放', async () => {
   const settingsGate = deferred(); const h = tasks({settingsGate}); const p = h.port();
   p.receive({type:'speak',text:'東京',requestId:1});
@@ -220,6 +235,7 @@ test('设置试听等待保存时切换供应商或停止，不会迟到发起�
     const ctx=context({document:{createElement:node},window:{addEventListener(){}},
       chrome:{permissions:{contains:async()=>false,request:async()=>true},
         runtime:{connect(){connections++;throw new Error('迟到的连接');}}}});
+    load(ctx,'src/ui/options-access.js');
     load(ctx,'src/ui/options-tts.js');
     const settings=ctx.LT.Settings.normalize({});
     ctx.LT.OptionsUI.mountSpeech({$,settings:()=>settings,save:patch=>Object.assign(settings,patch),flush:()=>gate.promise}).bind();

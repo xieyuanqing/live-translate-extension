@@ -15,6 +15,7 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'ut
 
 const STUB = `// 离线预览用的 chrome.* 替身，只在 dist/preview 里存在
 (() => {
+  window.fetch = async () => { throw new Error('离线预览不会连接真实接口，请在已安装扩展中测试。'); };
   const store = {
     settings: {
       apiKeys: '',
@@ -52,7 +53,11 @@ const STUB = `// 离线预览用的 chrome.* 替身，只在 dist/preview 里存
         getBytesInUse: async () => 123456,
       },
     },
-    permissions: { contains: async () => false, request: async () => true },
+    permissions: (() => {
+      const granted = new Set(['https://generativelanguage.googleapis.com/*']);
+      return { contains: async ({ origins }) => granted.has('<all_urls>') || origins.every(origin => granted.has(origin)),
+        request: async ({ origins }) => { origins.forEach(origin => granted.add(origin)); return true; } };
+    })(),
     tabs: { query: async () => [], sendMessage: async () => {}, create: () => {} },
     runtime: {
       getManifest: () => ({ version: '${VERSION}-preview' }),
@@ -66,6 +71,7 @@ const STUB = `// 离线预览用的 chrome.* 替身，只在 dist/preview 里存
 
 function rewrite(html) {
   return html
+    .replace('<body>', '<body><p style="margin:0;padding:9px 16px;text-align:center;font-size:12px;background:var(--accent-soft);color:var(--accent)">离线预览 · 使用示例配置，不保存到插件，不连接真实接口。</p>')
     .replace(/href="ui\.css"/g, 'href="../../src/ui/ui.css"')
     .replace(/href="options\.css"/g, 'href="../../src/ui/options.css"')
     .replace(/href="popup\.css"/g, 'href="../../src/ui/popup.css"')

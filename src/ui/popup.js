@@ -387,7 +387,7 @@
       (r.contextTimeoutSeconds ? ` · 等待上限 ${r.contextTimeoutSeconds} 秒` : '') + (r.contextError ? `：${r.contextError}` : '');
     if (r.stale) $('contextState').textContent = '输入已变化，这份预览已失效；请重新生成，或开始时重新整理。';
     $('contextEffect').textContent = r.provider === 'qwen'
-      ? '千问只接收下方术语映射和目标语言；背景说明、场景提示词不发送给千问。'
+      ? '千问只接收下方术语映射和目标语言；背景说明、翻译偏好不发送给千问。'
       : '下方是本场 Gemini 使用的完整提示词。运行中修改设置需重新开始才生效。';
     const terms = Object.entries(r.generated?.phrases || {});
     $('generatedContext').value = [r.generated?.background || '没有生成背景', '', '候选术语：', ...terms.map(([a, b]) => `${a} → ${b}`), ...(terms.length ? [] : ['无'])].join('\n');

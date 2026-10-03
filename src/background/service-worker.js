@@ -165,15 +165,16 @@ chrome.runtime.onConnect.addListener((port) => {
   };
   port.onMessage.addListener(async (msg) => {
     if (!msg || msg.type !== 'fetch') return;
-    let origin;
+    let origin, hostPattern;
     try {
       origin = new URL(msg.url).origin;
+      hostPattern = LT.Settings.hostPattern(msg.url);
     } catch (_) {
       send({ type: 'error', message: '接口地址无效' });
       return;
     }
     try {
-      const allowed = await chrome.permissions.contains({ origins: [`${origin}/*`] });
+      const allowed = await chrome.permissions.contains({ origins: [hostPattern] });
       if (!allowed) {
         send({ type: 'error', message: `浏览器未授权访问 ${origin}，请在扩展设置里点「授权访问该域名」` });
         return;

@@ -209,7 +209,7 @@ globalThis.LT = globalThis.LT || {};
         state(`导入失败：${err && err.message ? err.message : '文件无法解析'}`);
         return;
       }
-      const summary = `${next.scenes.length} 个场景、${next.providers.length} 套接口配置、${raw.includesKeys ? '包含' : '不含'} API Key`;
+      const summary = `${next.scenes.length} 项翻译偏好、${next.providers.length} 套接口配置、${raw.includesKeys ? '包含' : '不含'} API Key`;
       if (!confirm(`用文件里的设置覆盖当前设置？\n${summary}\n字幕缓存不受影响。`)) return;
       await ctx.replace(next);
     });
@@ -223,8 +223,18 @@ globalThis.LT = globalThis.LT || {};
         next.apiKeys = current.apiKeys;
         next.qwenApiKey = current.qwenApiKey;
         next.ttsGeminiApiKey = current.ttsGeminiApiKey;
+        next.liveProvider = current.liveProvider;
+        next.baseUrl = current.baseUrl;
+        next.qwenWorkspaceHost = current.qwenWorkspaceHost;
+        next.ttsProvider = current.ttsProvider;
+        next.ttsGeminiReuseKey = current.ttsGeminiReuseKey;
+        next.ttsGeminiBaseUrl = current.ttsGeminiBaseUrl;
+        next.ttsGeminiModel = current.ttsGeminiModel;
         next.providers = JSON.parse(JSON.stringify(current.providers));
         next.subsProviderId = current.subsProviderId;
+        next.liveContextProviderId = current.liveContextProviderId;
+        next.selectionProviderId = current.selectionProviderId;
+        next.commentProviderId = current.commentProviderId;
       }
       await ctx.replace(LT.Settings.normalize(next));
     });

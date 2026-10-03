@@ -1,10 +1,10 @@
-/** 评论与弹幕的预设选择、独立保存与即时预览。 */
+/** 评论与聊天的预设选择、独立保存与即时预览。 */
 globalThis.LT.OptionsUI = globalThis.LT.OptionsUI || {};
 (() => {
   const LT = globalThis.LT;
   LT.OptionsUI.mountTextStyle = ({ $, settings, save }) => {
     let scope = 'comment';
-    const names = { comment: '评论', chat: '弹幕' };
+    const names = { comment: '评论', chat: '聊天' };
     const choices = new Map();
     const colored = new Set(['textColor', 'underline', 'dotted', 'dashed', 'wavy', 'highlight', 'marker', 'quote', 'box']);
 
@@ -83,6 +83,6 @@ globalThis.LT.OptionsUI = globalThis.LT.OptionsUI || {};
       }
       refresh();
     }
-    return { bind, refresh };
+    return { bind, refresh, selectScope(next) { if (Object.hasOwn(names, next)) scope = next; refresh(); } };
   };
 })();

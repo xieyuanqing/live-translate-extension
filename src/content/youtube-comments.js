@@ -1,4 +1,4 @@
-/** YouTube 评论按需翻译：单条/当前可见内容，共用字幕文字接口，独立取消与页面内缓存。 */
+/** YouTube 评论按需翻译：单条/当前可见内容，独立文字接口、取消与页面内缓存。 */
 (() => {
   const LT = globalThis.LT;
   const T = LT.YouTubeText;
@@ -184,8 +184,8 @@
         const controller = new AbortController();
         controllers.add(controller);
         try {
-          const config = LT.TextModel.resolve(snapshot);
-          if (!config.key || !config.model) throw new Error('请在文字模型设置里配置字幕翻译模型的 Key 和模型名');
+          const config = LT.TextModel.resolve(snapshot, snapshot.commentProviderId);
+          if (!config.key || !config.model) throw new Error('请在「聊天与评论」选择接口，并在「接口」配置 Key 和模型名');
           const meta = snapshot.useMetadata ? await LT.YouTube.requestMeta() : null;
           if (!isCurrent(run) || controller.signal.aborted) return;
           const review = LT.LiveContext.currentReview?.();
@@ -194,7 +194,7 @@
           const system = T.commentPrompt(snapshot, snapshot.useMetadata ? LT.Prompt.formatMetadata(meta, snapshot.metadataLimit) : '', phrases);
           const todo = [];
           for (const job of batch) {
-            job.key = JSON.stringify([config.apiType, config.baseUrl, config.model, system, job.entry.original, parentText(job.entry)]);
+            job.key = JSON.stringify([config.id, config.apiType, config.baseUrl, config.model, system, job.entry.original, parentText(job.entry)]);
             if (!job.force && cache.has(job.key)) apply(job, cache.get(job.key), run);
             else todo.push(job);
           }
@@ -253,8 +253,11 @@
     const revision = ++settingsRevision;
     const next = await LT.Settings.load();
     if (revision !== settingsRevision) return;
+    const provider = LT.Settings.provider(next, next.commentProviderId);
+    // 复用的多个直播 Key 在请求时随机选；比较完整列表，避免每次读取都误判设置变化。
+    const reusedKeys = provider.apiType === 'gemini' && !provider.apiKey ? LT.Settings.keyList(next) : [];
     const nextSignature = JSON.stringify([next.enableCommentTranslation, next.sourceLang, next.targetLang,
-      LT.Settings.provider(next), next.manualContext, next.useMetadata, next.metadataLimit]);
+      provider, reusedKeys, next.manualContext, next.useMetadata, next.metadataLimit]);
     if (settings.enableChatTranslation !== next.enableChatTranslation) { chat = null; chatQueryAt = 0; }
     settings = next;
     if (signature !== nextSignature) { signature = nextSignature; reset({ remove: true }); }

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.4 — unreleased (2026-10-04)
+
+- Reorganize the nine Settings pages into Start, Features, and Appearance & Data. Keep existing routes and credentials, rename the API section to 接口, and use one interface dropdown on each feature page. Interface editing contains addresses, keys, models, browser permission and tests.
+- Add an independent comment interface choice. Older settings initially inherit the subtitle interface, then save comments separately; keep the new choice through backup/import/reset rules and invalidate pending comment requests when it changes.
+- Combine selected-text translation and reading under 划词与朗读. Move the shared theme, subtitle controls and comment/chat appearance into 外观 with three tabs; group subtitle controls into layout, text and background, with a desktop-only sticky preview.
+- Fold prompt previews, diagnostic logs and developer commands into 高级与关于. Remove duplicate introductions and nested card styling, use monochrome navigation, and show a compact permission scope/status/action row with folded help. Keep Qwen's all-sites scope visible and preserve request cancellation after denied or stale authorization.
+- Expand the selected live configuration while allowing manual editing of alternatives without switching usage. Use dropdown navigation and a text-interface picker at narrow widths. Add first-use guidance that distinguishes missing fields, host permission and exact-configuration generation-test results.
+- Share port-free host permission patterns across Settings authorization, background relays, selected-text translation and Gemini TTS. Keep ports in actual request URLs, fixing local gateways that were authorized in Settings but still rejected by runtime permission checks.
+- When restoring defaults with interfaces kept, retain text/live/speech keys, addresses, configurable models, provider choices and independent feature ids.
+- Syntax checks for 66 JavaScript files, self-tests and all 144 simulated regressions pass. An isolated in-memory Chromium fixture passes all nine pages, independent assignments, denied permission, stale test results and three appearance tabs at 1440/1024/390 px in both themes, with no script errors or horizontal overflow. For two example interfaces with advanced details folded and first-use guidance visible, the 390 px text-interface page measures 1,413 px versus the earlier 2,314 px screenshot. Permission/model substitutes do not verify native Chrome dialogs, service accounts or current YouTube flows.
+
+## 0.4.3 — unreleased (2026-10-03)
+
+- Consolidate text, live and speech connection settings under Services & APIs. Keep independent configurations and feature selections; feature pages link directly to the relevant connection category. Edit one text configuration at a time in a list-and-editor layout.
+- Put domain authorization immediately below the endpoint, with a shared status/control for text APIs, Gemini TTS and Qwen's special connection permission. Model queries and generation tests request the required host permission first; denial prevents a request. Endpoint changes invalidate pending permission checks. Only concurrency and request routing remain under Advanced.
+- Distinguish endpoint/model queries from a small paid generation test. Existing addresses, keys, model choices and optional permissions remain intact. Browser UI checks use isolated fixtures; real account and native permission-dialog validation remain separate.
+- Syntax/self-tests and 124 simulated regressions pass. Isolated Chromium checks all Settings pages, service navigation, independent assignments, denied authorization and changed endpoints in both themes at 1440/1024/390 px. Delayed checks or grants cannot authorize the new endpoint or launch a model query there.
+
+## 0.4.2 — unreleased (2026-10-03)
+
+- Redraw the selection panel's action icons and dropdown chevrons with consistent rounded strokes. The pin now has a clear pushpin outline: tilted when free, upright with a subtle fill when fixed.
+- Redesign the right-click selection panel around two compact cards: original speech beside the original, icon-only copy/retranslate beside the translation, and translation-model/speech-provider selectors in one footer. Move speech rate out of the panel; the existing speech Settings page remains its control.
+- Add a target-language selector and a position pin to the header. Cancel and restart translation when the target changes; validate and freeze the target per request. Show a small in-card loading state, use the speaker itself to stop playback, show short toasts for provider changes, collapse long originals to five lines, and leave translations unconstrained except by the viewport.
+- One new simulated target-language regression passes. An isolated Chromium fixture checks provider and language routing, pinning, speech stop, loading, long-text expansion, and 390 px fit. Real YouTube and Gemini TTS validation remain pending.
+
+## 0.4.1 — unreleased (2026-10-03)
+
+- Put the original-text speaker and its playback stop control beside the original in the selection panel. Add independent dropdowns for selection translation-model configurations and Microsoft/Gemini speech; switching the text model cancels the previous request, persists the choice and retranslates. Older settings inherit the prior subtitle model once, then keep the selection independently.
+- Replace the colorful ON/OFF badge and adjacent play/stop control in YouTube with one monochrome, native-sized button. It starts/stops live translation, starts/cancels whole-video translation, and toggles finished whole-video captions. Live caption visibility is now also available in the extension popup.
+- Syntax/self-tests and 120 simulated regressions pass. An isolated Chromium fixture checks the one-button control, speaker placement, model routing and persistence, speech switching, and a 390 px selection panel. The updated control has not yet been tested on a real YouTube page; real Gemini TTS and live/whole-video model actions remain unverified.
+
 ## 0.4.0 — unreleased (updated 2026-10-03)
 
 - Move chat translation status and the first-use local-model preparation control into the extension popup; remove the injected toolbar above YouTube chat. The popup starts required Chrome model downloads from its own click before asking the chat frame to resume.

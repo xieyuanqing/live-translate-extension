@@ -23,19 +23,19 @@ function harness(granted = true) {
     commands: { onCommand: { addListener() {} } },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
   };
-  const ctx = vm.createContext({ chrome, URL, Math, console, importScripts(...files) {
+  const ctx = vm.createContext({ chrome, URL, Math, console, AbortController, importScripts(...files) {
     for (const file of files) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file.slice(1)), 'utf8'), ctx);
   } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src/background/service-worker.js'), 'utf8'), ctx);
-  function port(tabUrl = 'https://www.youtube.com/watch?v=abc') {
-    const p = { name: ctx.LT.QWEN_AUTH_PORT, sender: { tab: { id: 17, url: tabUrl } }, replies: [],
+  function port(tabUrl = 'https://www.youtube.com/watch?v=abc', name = ctx.LT.QWEN_AUTH_PORT) {
+    const p = { name, sender: { tab: { id: 17, url: tabUrl } }, replies: [],
       onMessage: { addListener(fn) { p.receive = fn; } },
       onDisconnect: { addListener(fn) { p.disconnect = fn; } },
       postMessage(msg) { p.replies.push(msg); } };
     for (const fn of onConnect) fn(p);
     return p;
   }
-  return { rules, port };
+  return { rules, port, ctx, chrome };
 }
 
 const url = 'wss://ws-example.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime';
@@ -68,5 +68,20 @@ test('缺权限或非千问地址不得创建带 Key 的规则', async () => {
     await flush();
     assert.equal(p.replies.at(-1).type, 'error');
     assert.equal(item.h.rules.size, 0);
+  }
+});
+
+test('文字接口后台转发检查不含端口的权限，同时保留实际请求端口；拒绝授权不请求', async () => {
+  for (const granted of [true, false]) {
+    const h = harness();
+    const checked = [], requested = [];
+    h.chrome.permissions.contains = async ({ origins }) => { checked.push(origins[0]); return granted; };
+    h.ctx.fetch = async value => { requested.push(value); return { ok: true, status: 200,
+      headers: { get: () => '' }, text: async () => 'mock response' }; };
+    const p = h.port(undefined, h.ctx.LT.RELAY_PORT);
+    await p.receive({ type: 'fetch', url: 'http://127.0.0.1:23000/v1/models', method: 'GET' });
+    assert.deepEqual(checked, ['http://127.0.0.1/*']);
+    assert.deepEqual(requested, granted ? ['http://127.0.0.1:23000/v1/models'] : []);
+    assert.equal(p.replies.at(-1).type, granted ? 'end' : 'error');
   }
 });

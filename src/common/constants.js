@@ -138,7 +138,7 @@ globalThis.LT = globalThis.LT || {};
     liveContextTimeoutSeconds: 60, // 包含连接、模型等待和收完整个回答
     debugLogLevel: 'off', // 显式开启后才把直播诊断记录写入本机扩展存储
     enableChatTranslation: false, // YouTube 聊天：Chrome 本机翻译，单独开关
-    enableCommentTranslation: false, // YouTube 评论：复用字幕文字模型，按需翻译
+    enableCommentTranslation: false, // YouTube 评论：独立选用文字接口，按需翻译
     commentTranslationStyle: 'plain',
     chatTranslationStyle: 'plain',
     commentTranslationColor: '#3478b8',
@@ -153,6 +153,7 @@ globalThis.LT = globalThis.LT || {};
     ttsGeminiVoice: 'Kore',
     ttsRate: 1,
     selectionProviderId: '', // 划词翻译独立选用文字模型；旧设置首次沿用整片字幕模型
+    commentProviderId: '', // 评论独立选用文字接口；旧设置首次沿用整片字幕接口
 
     sourceLang: 'ja',
     targetLang: 'zh',

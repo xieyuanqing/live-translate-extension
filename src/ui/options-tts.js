@@ -5,7 +5,7 @@ globalThis.LT = globalThis.LT || {};
   LT.OptionsUI = LT.OptionsUI || {};
   function mountSpeech(ctx) {
     const $ = ctx.$;
-    let port = null, heartbeat = null, requestId = 0;
+    let port = null, heartbeat = null, requestId = 0, access = null;
     function stop() {
       requestId++; // 同时取消尚未完成保存、还没送到后台的试听。
       try { port?.postMessage({ type: 'stop' }); } catch (_) { /* 已断开 */ }
@@ -17,11 +17,18 @@ globalThis.LT = globalThis.LT || {};
       $('ttsMicrosoftFields').hidden = s.ttsProvider !== 'microsoft';
       $('ttsGeminiFields').hidden = s.ttsProvider !== 'gemini';
       $('ttsGeminiApiKey').disabled = s.ttsGeminiReuseKey;
+      $('speechServiceSummary').textContent = s.ttsProvider === 'gemini' ? 'Gemini TTS' : '微软朗读';
     }
     async function preview(text) {
       $('ttsPreviewState').textContent = '准备中…'; $('ttsStopPreview').disabled = false;
       const id = ++requestId;
       try {
+        if (ctx.settings().ttsProvider === 'gemini' && !await access.authorize()) {
+          if (id !== requestId) return;
+          $('ttsPreviewState').textContent = '未获得接口域名权限，请到「接口 → 语音朗读」授权。';
+          $('ttsStopPreview').disabled = true;
+          return;
+        }
         await ctx.flush();
         if (id !== requestId) return;
         if (!port) {
@@ -35,9 +42,11 @@ globalThis.LT = globalThis.LT || {};
           port.onDisconnect.addListener(() => { clearInterval(heartbeat); port = null; $('ttsStopPreview').disabled = true; $('ttsPreviewState').textContent = '连接已断开，请重新试听'; });
         }
         port.postMessage({ type: 'speak', text, requestId: id, rate: ctx.settings().ttsRate });
-      } catch (_) { $('ttsPreviewState').textContent = '无法连接朗读服务，请保存设置后重试'; $('ttsStopPreview').disabled = true; }
+      } catch (_) { $('ttsPreviewState').textContent = '无法连接朗读接口，请保存设置后重试'; $('ttsStopPreview').disabled = true; }
     }
     function bind() {
+      access = LT.OptionsUI.mountHostAccess({ container: $('ttsGeminiAccess'), getUrl: () => ctx.settings().ttsGeminiBaseUrl,
+        buttonId: 'ttsGrantGemini', statusId: 'ttsPermissionState' });
       const lists = { ttsProvider: [['microsoft', '微软（默认）'], ['gemini', 'Gemini TTS']],
         ttsMicrosoftJaVoice: LT.Selection.VOICES.ja, ttsMicrosoftEnVoice: LT.Selection.VOICES.en,
         ttsGeminiVoice: LT.Selection.VOICES.gemini.map(voice => [voice, voice]),
@@ -49,17 +58,10 @@ globalThis.LT = globalThis.LT || {};
       }
       for (const field of ['ttsGeminiApiKey', 'ttsGeminiBaseUrl', 'ttsGeminiModel']) {
         $(field).value = ctx.settings()[field];
-        $(field).addEventListener('input', () => { stop(); ctx.save({ [field]: $(field).value }); });
+        $(field).addEventListener('input', () => { stop(); ctx.save({ [field]: $(field).value }); if (field === 'ttsGeminiBaseUrl') access.refresh(); });
       }
       $('ttsGeminiReuseKey').checked = ctx.settings().ttsGeminiReuseKey;
       $('ttsGeminiReuseKey').addEventListener('change', () => { stop(); ctx.save({ ttsGeminiReuseKey: $('ttsGeminiReuseKey').checked }); render(); });
-      $('ttsGrantGemini').addEventListener('click', async () => {
-        try {
-          const origin = new URL(ctx.settings().ttsGeminiBaseUrl).origin;
-          const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
-          $('ttsPermissionState').textContent = granted ? '已授权' : '未授权';
-        } catch (_) { $('ttsPermissionState').textContent = '请检查接口地址'; }
-      });
       $('ttsPreviewJa').addEventListener('click', () => preview('今日はいい天気ですね。東京で友達と会います。'));
       $('ttsPreviewEn').addEventListener('click', () => preview('Hello! This is a short reading test. How are you today?'));
       $('ttsStopPreview').addEventListener('click', stop);
