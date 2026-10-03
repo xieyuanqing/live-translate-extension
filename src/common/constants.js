@@ -152,6 +152,7 @@ globalThis.LT = globalThis.LT || {};
     ttsGeminiModel: 'gemini-3.1-flash-tts-preview',
     ttsGeminiVoice: 'Kore',
     ttsRate: 1,
+    selectionProviderId: '', // 划词翻译独立选用文字模型；旧设置首次沿用整片字幕模型
 
     sourceLang: 'ja',
     targetLang: 'zh',

@@ -83,6 +83,8 @@ globalThis.LT = globalThis.LT || {};
       .filter((p) => !ids.has(p.id) && ids.add(p.id));
     if (s.providers.length === 0) s.providers = LT.DEFAULTS.providers.map((p) => normalizeProvider(p));
     if (!s.providers.some((p) => p.id === s.subsProviderId)) s.subsProviderId = s.providers[0].id;
+    if (!s.selectionProviderId) s.selectionProviderId = s.subsProviderId;
+    if (!s.providers.some((p) => p.id === s.selectionProviderId)) s.selectionProviderId = s.providers[0].id;
     // 旧设置首次沿用原选择，保存后两种用途各自保管 id，切换字幕模型不再连带切换整理模型。
     if (!s.liveContextProviderId) s.liveContextProviderId = s.subsProviderId;
     if (!s.providers.some((p) => p.id === s.liveContextProviderId)) s.liveContextProviderId = s.providers[0].id;

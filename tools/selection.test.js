@@ -77,7 +77,21 @@ test('新增 Gemini Key 导出默认剔除、导入保留，错误与日志脱�
   assert.equal(JSON.stringify(ctx.LT.LiveLog.safe(settings, [], 1000)).includes('private-test-key'), false);
 });
 
-function tasks({ settingsGate, synthesize, playerGate, failInjection } = {}) {
+test('划词翻译模型独立于整片字幕模型，旧设置首次沿用原选择', () => {
+  const ctx = context();
+  const providers = [
+    { id: 'first', apiType: 'gemini', model: 'first-model' },
+    { id: 'second', apiType: 'openai', model: 'second-model' },
+  ];
+  const old = ctx.LT.Settings.normalize({ providers, subsProviderId: 'second' });
+  assert.equal(old.selectionProviderId, 'second');
+  const independent = ctx.LT.Settings.normalize({ ...old, subsProviderId: 'first' });
+  assert.equal(independent.selectionProviderId, 'second');
+  const removed = ctx.LT.Settings.normalize({ ...old, providers: providers.slice(0, 1) });
+  assert.equal(removed.selectionProviderId, 'first');
+});
+
+function tasks({ settingsGate, synthesize, playerGate, failInjection, customSettings, translateResolve, permissionContains } = {}) {
   const connect = [], messages = [], updates = [], storage = [], clicks = [];
   const commands = [], injections = [], sent = [], transfers = [], windows = [];
   let playerExists = false;
@@ -90,16 +104,16 @@ function tasks({ settingsGate, synthesize, playerGate, failInjection } = {}) {
       getContexts: async () => playerExists ? [{}] : [],
       sendMessage: async message => { commands.push(message); return {ok:true}; } },
     offscreen: { createDocument: async () => { if (playerGate) await playerGate.promise; playerExists = true; } },
-    permissions: { contains: async () => true },
+    permissions: { contains: permissionContains || (async () => true) },
     storage: { onChanged: { addListener: fn => storage.push(fn) }, session: {set:async value=>{transfers.push(value);}} },
     windows: {create:async value=>{windows.push(value);}},
     tabs: { onUpdated: { addListener: fn => updates.push(fn) }, sendMessage: async (...args) => { sent.push(args); }, create() {} },
   };
   const ctx = context({chrome});
-  const defaults = ctx.LT.Settings.normalize({});
+  const defaults = ctx.LT.Settings.normalize(customSettings || {});
   ctx.LT.Settings.load = async () => settingsGate ? settingsGate.promise : defaults;
   ctx.LT.MicrosoftTTS.synthesize = synthesize || (async () => ({bytes:Uint8Array.from([1,2,3]),mime:'audio/mpeg'}));
-  ctx.LT.TextModel = {resolve:()=>({key:'test',model:'test',baseUrl:'https://example.com'}),translate:async()=>({text:'译文'})};
+  ctx.LT.TextModel = {resolve:translateResolve || (()=>({key:'test',model:'test',baseUrl:'https://example.com'})),translate:async()=>({text:'译文'})};
   load(ctx, 'src/background/selection.js');
   function port(frameId = 0) {
     const received = [], disconnect = [];
@@ -111,6 +125,39 @@ function tasks({ settingsGate, synthesize, playerGate, failInjection } = {}) {
   }
   return {ctx,port,commands,defaults,updates,messages,clicks,injections,sent,transfers,windows};
 }
+
+test('后台按浮窗指定的配置发送翻译，不把无效 id 悄悄退到另一模型', async () => {
+  const selected = [];
+  const providers = [
+    { id: 'first', apiType: 'gemini', model: 'first-model' },
+    { id: 'second', apiType: 'openai', model: 'second-model' },
+  ];
+  const h = tasks({ customSettings: { providers, subsProviderId: 'first', selectionProviderId: 'second' },
+    translateResolve: (_settings, id) => { selected.push(id); return { key:'test', model:'test', baseUrl:'https://example.com' }; } });
+  const port = h.port();
+  port.receive({ type:'translate', text:'東京', providerId:'second', requestId:1 });
+  await waitFor(() => port.replies.some(item => item.type === 'translation' && item.requestId === 1), '应收到所选模型的译文');
+  assert.deepEqual(selected, ['second']);
+  port.receive({ type:'translate', text:'東京', providerId:'removed', requestId:2 });
+  await waitFor(() => port.replies.some(item => item.type === 'translation' && item.requestId === 2), '应收到无效模型错误');
+  assert.equal(selected.length, 1);
+  assert.match(port.replies.at(-1).error, /已删除/);
+});
+test('划词切换目标语言时按请求冻结语言，无效语言不会进入模型', async () => {
+  const h = tasks();
+  const prompts = [];
+  h.ctx.LT.TextModel.translate = async args => { prompts.push(args.system); return { text: 'translated' }; };
+  const port = h.port();
+  port.receive({ type:'translate', text:'今日はいい天気ですね。', targetLang:'en', requestId:11 });
+  await waitFor(() => port.replies.some(item => item.requestId === 11), '应收到英语译文');
+  assert.match(prompts[0], /英语/);
+  assert.equal(port.replies.at(-1).target, 'en');
+  port.receive({ type:'translate', text:'今日はいい天気ですね。', targetLang:'invalid', requestId:12 });
+  await waitFor(() => port.replies.some(item => item.requestId === 12), '应收到无效语言错误');
+  assert.equal(prompts.length, 1);
+  assert.match(port.replies.at(-1).error, /目标语言无效/);
+});
+
 test('准备时停止，迟到的设置和合成结果不能开始播放', async () => {
   const settingsGate = deferred(); const h = tasks({settingsGate}); const p = h.port();
   p.receive({type:'speak',text:'東京',requestId:1});
@@ -164,13 +211,15 @@ test('设置试听等待保存时切换供应商或停止，不会迟到发起�
   for (const action of ['ttsStopPreview','ttsProvider']) {
     const gate=deferred(); let connections=0;
     const elements=new Map();
+    const node=()=>({value:'',disabled:false,textContent:'',listeners:{},
+      append(){},setAttribute(){},addEventListener(event,fn){this.listeners[event]=fn;}});
     const $=id=>{
-      if (!elements.has(id)) elements.set(id,{value:'',disabled:false,textContent:'',listeners:{},
-        append(){},addEventListener(event,fn){this.listeners[event]=fn;}});
+      if (!elements.has(id)) elements.set(id,node());
       return elements.get(id);
     };
-    const ctx=context({document:{createElement:()=>({})},window:{addEventListener(){}},
-      chrome:{runtime:{connect(){connections++;throw new Error('迟到的连接');}}}});
+    const ctx=context({document:{createElement:node},window:{addEventListener(){}},
+      chrome:{permissions:{contains:async()=>false,request:async()=>true},
+        runtime:{connect(){connections++;throw new Error('迟到的连接');}}}});
     load(ctx,'src/ui/options-tts.js');
     const settings=ctx.LT.Settings.normalize({});
     ctx.LT.OptionsUI.mountSpeech({$,settings:()=>settings,save:patch=>Object.assign(settings,patch),flush:()=>gate.promise}).bind();
