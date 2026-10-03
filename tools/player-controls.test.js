@@ -54,7 +54,7 @@ class FakeNode {
 }
 
 test('流译按钮只插入底部控制栏，按直播/整片状态切换并适应控制栏重建', () => {
-  const document = { createElement: tag => new FakeNode(tag) };
+  const document = { createElement: tag => new FakeNode(tag), createElementNS: (_ns, tag) => new FakeNode(tag) };
   const ctx = vm.createContext({ document, chrome: { runtime: { getURL: path => `extension://${path}` } } });
   load(ctx, 'src/content/player-controls.js');
   let captions = 0, translation = 0;
@@ -76,25 +76,18 @@ test('流译按钮只插入底部控制栏，按直播/整片状态切换并适�
   assert.equal(player.children.length, 1);
   assert.equal(bar.children[0], controls.root);
   assert.equal(bar.children[1], nativeCc);
-  assert.equal(controls.captionsButton.children[0].src, 'extension://icons/icon32.png');
-  assert.equal(controls.root.children.length, 2);
+  assert.equal(controls.button.children[0].tag, 'svg');
+  assert.equal(controls.root.children.length, 1);
   assert.equal(controls.root.style.position, undefined);
   controls.update({ modeKnown: false, isLive: false, phase: 'idle', liveCaptionsVisible: true, video: { phase: 'idle', visible: true } });
-  assert.equal(controls.badge.textContent, 'OFF');
-  assert.equal(controls.captionsButton.disabled, true);
-  assert.equal(controls.actionButton.disabled, true);
+  assert.equal(controls.button.disabled, true);
   controls.update({ modeKnown: true, isLive: true, phase: 'idle', liveCaptionsVisible: true, video: { phase: 'idle' } });
-  assert.equal(controls.badge.textContent, 'OFF');
-  assert.equal(controls.captionsButton.disabled, true);
-  assert.equal(controls.actionButton.attributes['aria-label'], '开始实时翻译');
+  assert.equal(controls.button.attributes['aria-label'], '开始实时翻译');
   controls.update({ modeKnown: true, isLive: true, phase: 'running', liveCaptionsVisible: true, video: { phase: 'idle' } });
-  assert.equal(controls.badge.textContent, 'ON');
-  assert.equal(controls.captionsButton.attributes['aria-label'], '隐藏直播字幕');
-  assert.equal(controls.actionButton.attributes['aria-label'], '停止实时翻译');
-  assert.equal(controls.actionIcon.textContent, '■');
-  controls.captionsButton.fire('click');
-  controls.actionButton.fire('click');
-  assert.deepEqual([captions, translation], [1, 1]);
+  assert.equal(controls.button.attributes['aria-label'], '停止实时翻译');
+  assert.equal(controls.button.attributes['aria-pressed'], 'true');
+  controls.button.fire('click');
+  assert.deepEqual([captions, translation], [0, 1]);
   let stopped = false, prevented = false;
   controls.root.fire('click', { stopPropagation() { stopped = true; } });
   controls.root.fire('dblclick', { preventDefault() { prevented = true; } });
@@ -102,10 +95,9 @@ test('流译按钮只插入底部控制栏，按直播/整片状态切换并适�
   assert.equal(prevented, true);
 
   controls.update({ modeKnown: true, isLive: false, phase: 'idle', video: { phase: 'translating', visible: false, done: 3, total: 10 } });
-  assert.equal(controls.badge.textContent, 'OFF');
-  assert.equal(controls.captionsButton.attributes['aria-label'], '显示整片字幕');
-  assert.equal(controls.actionButton.attributes['aria-label'], '取消整片翻译');
-  assert.equal(controls.captionsButton.attributes['aria-pressed'], 'false');
+  assert.equal(controls.button.attributes['aria-label'], '取消整片翻译');
+  controls.button.fire('click');
+  assert.equal(translation, 2);
 
   controls.mount(player);
   assert.equal(bar.children.length, 2);
@@ -117,12 +109,16 @@ test('流译按钮只插入底部控制栏，按直播/整片状态切换并适�
   assert.equal(bar.children.length, 1);
   assert.equal(newBar.children.length, 1);
   assert.notEqual(controls.root, oldRoot);
-  assert.equal(controls.badge.textContent, 'OFF');
+  assert.equal(controls.button.attributes['aria-label'], '取消整片翻译');
 
   controls.update({ modeKnown: true, isLive: false, phase: 'idle', video: { phase: 'ready', visible: true } });
-  assert.equal(controls.badge.textContent, 'ON');
-  assert.equal(controls.actionButton.disabled, true);
-  assert.equal(controls.actionIcon.textContent, '✓');
+  assert.equal(controls.button.attributes['aria-label'], '隐藏整片字幕');
+  controls.button.fire('click');
+  assert.equal(captions, 1);
+  controls.update({ modeKnown: true, isLive: false, phase: 'idle', video: { phase: 'ready', visible: false } });
+  assert.equal(controls.button.attributes['aria-label'], '显示整片字幕');
+  controls.button.fire('click');
+  assert.equal(captions, 2);
   controls.unmount();
   assert.equal(newBar.children.length, 0);
 });
@@ -130,7 +126,7 @@ test('流译按钮只插入底部控制栏，按直播/整片状态切换并适�
 test('直播手动隐藏在定时门控及广告结束后仍隐藏，音频采集继续', async () => {
   const intervals = [];
   const captionVisible = [];
-  let controls, client, tap;
+  let controls, client, tap, onMessage;
   let ad = false;
   const video = { paused: false, muted: false, volume: 1, currentTime: 0 };
   const player = {};
@@ -138,7 +134,7 @@ test('直播手动隐藏在定时门控及广告结束后仍隐藏，音频采�
     console: { info() {}, warn() {}, error() {} }, Date,
     setInterval(fn) { intervals.push(fn); },
     window: { addEventListener() {} },
-    chrome: { runtime: { sendMessage: async () => {}, onMessage: { addListener() {} } } },
+    chrome: { runtime: { sendMessage: async () => {}, onMessage: { addListener(fn) { onMessage = fn; } } } },
   });
   load(ctx, 'src/common/constants.js');
   load(ctx, 'src/common/prompt.js');
@@ -199,15 +195,21 @@ test('直播手动隐藏在定时门控及广告结束后仍隐藏，音频采�
   assert.equal(client.running, true);
   controls.onToggleCaptions();
   assert.equal(captionVisible.at(-1), true);
+  onMessage({ type: LT.MSG.LIVE_SET_VISIBLE, payload: false }, {}, () => {});
+  assert.equal(captionVisible.at(-1), false);
+  onMessage({ type: LT.MSG.LIVE_SET_VISIBLE, payload: true }, {}, () => {});
+  assert.equal(captionVisible.at(-1), true);
   controls.onToggleTranslation();
   assert.equal(client.running, false);
   assert.equal(tap.detached, true);
 });
 
-test('扩展 manifest 注入独立控件及图标资源', () => {
+test('扩展 manifest 注入单个中性播放器控件', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
   const content = manifest.content_scripts.find(item => item.js?.includes('src/content/main.js'));
   assert.ok(content.js.indexOf('src/content/player-controls.js') < content.js.indexOf('src/content/main.js'));
   assert.ok(content.css.includes('src/content/player-controls.css'));
-  assert.ok(manifest.web_accessible_resources.some(item => item.resources.includes('icons/icon32.png')));
+  const style = fs.readFileSync(path.join(ROOT, 'src/content/player-controls.css'), 'utf8');
+  assert.match(style, /width: 48px/);
+  assert.doesNotMatch(style, /#2670d5|__badge|__action/);
 });

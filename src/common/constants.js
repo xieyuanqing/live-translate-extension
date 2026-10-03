@@ -263,6 +263,7 @@ globalThis.LT = globalThis.LT || {};
     VS_START: 'lt:vs-start', // payload: { force?: boolean }
     VS_CANCEL: 'lt:vs-cancel',
     VS_SET_VISIBLE: 'lt:vs-set-visible', // payload: boolean
+    LIVE_SET_VISIBLE: 'lt:live-set-visible', // payload: boolean
     VS_CLEAR: 'lt:vs-clear', // 删除当前视频的缓存
   };
 

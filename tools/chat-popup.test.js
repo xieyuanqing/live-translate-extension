@@ -68,10 +68,12 @@ test('弹窗点击先并行发起检测与待译语对的 create，再通知聊�
   let reportProgress;
   let finishDetector;
   let finishTranslator;
+  let refreshTick;
+  let livePhase = 'idle', liveCaptionsVisible = true;
   const detectorReady = new Promise(resolve => { finishDetector = resolve; });
   const translatorReady = new Promise(resolve => { finishTranslator = resolve; });
   const ctx = vm.createContext({
-    URL, AbortController, DOMException, setInterval: () => 1, clearInterval() {}, confirm: () => true,
+    URL, AbortController, DOMException, setInterval: fn => { refreshTick = fn; return 1; }, clearInterval() {}, confirm: () => true,
     document: { getElementById: $, createElement: () => new FakeNode(), activeElement: null,
       documentElement: { dataset: { theme: 'light' } } },
     window: { addEventListener() {}, close() {} },
@@ -85,10 +87,11 @@ test('弹窗点击先并行发起检测与待译语对的 create，再通知聊�
       tabs: { query: async () => [{ id: 7, url: 'https://www.youtube.com/watch?v=video-a' }],
         sendMessage: async (_tabId, msg, opts) => {
           messages.push({ msg, opts });
-          if (msg.type === 'lt:query-status') return { phase: 'idle', onWatchPage: true, isLive: true,
-            videoId: 'video-a', title: '直播', level: 0 };
+          if (msg.type === 'lt:query-status') return { phase: livePhase, onWatchPage: true, isLive: true,
+            liveCaptionsVisible, videoId: 'video-a', title: '直播', level: 0 };
           if (msg.type === 'lt:query-text-status') return { chat: { phase: 'waiting', pendingLanguage: 'ko' } };
           if (msg.type === 'lt:prepare-chat') return { ok: true };
+          if (msg.type === 'lt:live-set-visible') { liveCaptionsVisible = !!msg.payload; return { ok: true }; }
           return null;
         } },
       runtime: { getManifest: () => ({ version: '0.4.0' }), getURL: path => path, openOptionsPage() {} },
@@ -113,4 +116,11 @@ test('弹窗点击先并行发起检测与待译语对的 create，再通知聊�
   const message = messages.find(entry => entry.msg.type === 'lt:prepare-chat');
   assert.equal(message.opts, undefined);
   assert.equal(message.msg.payload.videoId, 'video-a');
+  livePhase = 'running';
+  await refreshTick();
+  assert.equal($('liveToggleCaptions').textContent, '隐藏直播字幕');
+  await $('liveToggleCaptions').fire('click');
+  assert.equal(messages.at(-3).msg.type, 'lt:live-set-visible');
+  assert.equal(messages.at(-3).msg.payload, false);
+  assert.equal($('liveToggleCaptions').textContent, '显示直播字幕');
 });

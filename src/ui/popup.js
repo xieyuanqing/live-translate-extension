@@ -166,6 +166,9 @@
     $('toggle').textContent = status?.phase === 'starting' ? '取消启动' : running ? '停止实时翻译' : '开始实时翻译';
     $('toggle').classList.toggle('on', running);
     $('toggle').disabled = busy || !status || !status.onWatchPage;
+    $('liveToggleCaptions').classList.toggle('hidden', !running);
+    $('liveToggleCaptions').textContent = status?.liveCaptionsVisible ? '隐藏直播字幕' : '显示直播字幕';
+    $('liveToggleCaptions').disabled = busy;
     $('reloadPage').classList.toggle('hidden', !!status || tabId == null);
     $('restart').classList.toggle('hidden', !running);
     $('restart').disabled = busy;
@@ -468,6 +471,18 @@
     }
   }
   $('toggle').addEventListener('click', () => changeSession());
+  $('liveToggleCaptions').addEventListener('click', async () => {
+    if (busy || !status || status.phase === 'idle') return;
+    busy = true;
+    renderStatus();
+    try {
+      await send(LT.MSG.LIVE_SET_VISIBLE, !status.liveCaptionsVisible);
+      await refresh();
+    } finally {
+      busy = false;
+      renderStatus();
+    }
+  });
   $('restart').addEventListener('click', () => changeSession(true));
   $('reloadPage').addEventListener('click', async () => {
     if (tabId == null) return;

@@ -640,6 +640,9 @@ globalThis.LT = globalThis.LT || {};
       case LT.MSG.VS_SET_VISIBLE:
         videoSubs.setVisible(!!msg.payload);
         break;
+      case LT.MSG.LIVE_SET_VISIBLE:
+        if (session.phase !== 'idle') setLiveCaptionsVisible(!!msg.payload);
+        break;
       case LT.MSG.VS_CLEAR:
         if (videoStartPending) sessionGeneration++;
         videoStartPending = false;
