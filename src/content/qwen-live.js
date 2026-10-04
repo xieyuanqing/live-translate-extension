@@ -69,18 +69,17 @@ globalThis.LT = globalThis.LT || {};
       this.ws = null;
       this.ready = false;
       if (ws) {
-        try {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send('{"type":"session.finish"}');
-            const close = () => { try { ws.close(1000, 'bye'); } catch (_) { /* 已关闭 */ } };
-            const deadline = setTimeout(close, 3000);
-            ws.onmessage = (event) => {
-              try { if (JSON.parse(event.data).type === 'session.finished') { clearTimeout(deadline); close(); } }
-              catch (_) { /* 忽略非 JSON 尾包 */ }
-            };
-            ws.onclose = () => clearTimeout(deadline);
-          } else ws.close(1000, 'bye');
-        } catch (_) { /* 已关闭 */ }
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send('{"type":"session.finish"}');
+          const close = () => ws.close(1000, 'bye');
+          const deadline = setTimeout(close, 3000);
+          ws.onmessage = (event) => {
+            let type;
+            try { type = JSON.parse(event.data).type; } catch (_) { return; /* 忽略非 JSON 尾包 */ }
+            if (type === 'session.finished') { clearTimeout(deadline); close(); }
+          };
+          ws.onclose = () => clearTimeout(deadline);
+        } else ws.close(1000, 'bye');
       }
       this.queue.length = 0;
       this.sentRing.length = 0;
@@ -126,7 +125,7 @@ globalThis.LT = globalThis.LT || {};
       const old = this.ws;
       this.ws = null;
       this.#disconnectAuth();
-      try { if (old) old.close(1000, 'replace'); } catch (_) { /* 已关闭 */ }
+      if (old) old.close(1000, 'replace');
       if (!(state === 'rotating' && wasFinishing)) this.listener.onState(state);
 
       let url;
@@ -214,7 +213,7 @@ globalThis.LT = globalThis.LT || {};
         if (!this.running || this.generation !== gen || this.ready) return;
         this.generation++;
         this.#disconnectAuth();
-        try { if (this.ws) this.ws.close(4000, 'handshake timeout'); } catch (_) { /* ignore */ }
+        if (this.ws) this.ws.close(4000, 'handshake timeout');
         this.#scheduleReconnect(true);
       }, HANDSHAKE_TIMEOUT_MS);
     }

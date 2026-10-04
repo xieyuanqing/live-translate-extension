@@ -81,11 +81,7 @@ globalThis.LT = globalThis.LT || {};
       const ws = this.ws;
       this.ws = null;
       this.ready = false;
-      try {
-        if (ws) ws.close(1000, 'bye');
-      } catch (_) {
-        /* 已经关了 */
-      }
+      if (ws) ws.close(1000, 'bye');
       this.queue.length = 0;
       this.sentRing.length = 0;
       this.#state('stopped');
@@ -110,7 +106,7 @@ globalThis.LT = globalThis.LT || {};
       const gen = ++this.generation;
       const old = this.ws;
       this.ws = null;
-      try { if (old) old.close(1000, 'replace'); } catch (_) { /* 已关闭 */ }
+      if (old) old.close(1000, 'replace');
       this.#state(state);
 
       const key = this.opts.keyProvider();
@@ -174,11 +170,7 @@ globalThis.LT = globalThis.LT || {};
         console.warn('[流译] 握手超时，强制重连 gen=' + gen);
         const old = this.ws;
         this.generation++; // 作废旧连接回调，避免它的 onclose 再触发一次重连
-        try {
-          if (old) old.close(4000, 'handshake timeout');
-        } catch (_) {
-          /* ignore */
-        }
+        if (old) old.close(4000, 'handshake timeout');
         this.#scheduleReconnect(true);
       }, HANDSHAKE_TIMEOUT_MS);
     }

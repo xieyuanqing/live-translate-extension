@@ -131,8 +131,8 @@ globalThis.LT = globalThis.LT || {};
       if (this.phase === 'translating') this.progressNote();
       try {
         this.onStatus();
-      } catch (_) {
-        /* 状态推送失败不影响任务 */
+      } catch (err) {
+        console.warn('[流译] 状态推送失败', err);
       }
     }
 
@@ -288,15 +288,9 @@ globalThis.LT = globalThis.LT || {};
     }
 
     abortAll() {
-      if (this.reading && LT.YouTube && typeof LT.YouTube.cancelCaptions === 'function') LT.YouTube.cancelCaptions();
+      if (this.reading) LT.YouTube.cancelCaptions();
       this.reading = false;
-      for (const c of this.controllers) {
-        try {
-          c.abort();
-        } catch (_) {
-          /* 已结束 */
-        }
-      }
+      for (const c of this.controllers) c.abort();
       this.controllers.clear();
     }
 

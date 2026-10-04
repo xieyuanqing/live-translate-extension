@@ -345,14 +345,10 @@
 
   /** CC 开关状态：优先看播放器按钮，其次问播放器；都拿不到返回 null。 */
   function ccState() {
-    try {
-      const button = document.querySelector('.ytp-subtitles-button');
-      if (button) {
-        const v = button.getAttribute('aria-pressed');
-        if (v === 'true' || v === 'false') return v === 'true';
-      }
-    } catch (_) {
-      /* 没有按钮 */
+    const button = document.querySelector('.ytp-subtitles-button');
+    if (button) {
+      const v = button.getAttribute('aria-pressed');
+      if (v === 'true' || v === 'false') return v === 'true';
     }
     try {
       const p = player();
@@ -374,11 +370,7 @@
       style = null;
     }
     return () => {
-      try {
-        if (style) style.remove();
-      } catch (_) {
-        /* 已移除 */
-      }
+      if (style) style.remove();
     };
   }
 
