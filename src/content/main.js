@@ -264,6 +264,46 @@ globalThis.LT = globalThis.LT || {};
     }
   }
 
+  async function resolveRunInputs({ reason, videoId, runTempContext }, isCurrent) {
+    const runSettings = await LT.Settings.load();
+    if (!isCurrent()) return null;
+    settings = runSettings;
+
+    const liveProvider = runSettings.liveProvider === 'qwen' ? 'qwen' : 'gemini';
+    session.debugLog = LT.LiveLog.open({
+      level: runSettings.debugLogLevel,
+      provider: liveProvider,
+      model: liveProvider === 'qwen' ? LT.QWEN_MODEL : LT.MODEL,
+      videoId,
+      sourceLang: runSettings.sourceLang,
+      targetLang: runSettings.targetLang,
+      reason,
+    }, runSettings) || LT.LiveLog.NOOP;
+    const key = liveProvider === 'qwen' ? runSettings.qwenApiKey : LT.Settings.pickKey(runSettings);
+    if (!key) {
+      onConnState(`error:未配置${liveProvider === 'qwen' ? '千问' : ' Gemini'} API Key，请在扩展设置里填写`);
+      session.debugLog.finish('missing_key').catch(() => {});
+      session.debugLog = LT.LiveLog.NOOP;
+      session.phase = 'idle';
+      return null;
+    }
+
+    const video = await LT.YouTube.waitForVideo();
+    if (!isCurrent()) return null;
+    const player = LT.YouTube.player();
+    if (!player || !video) {
+      onConnState('error:没有找到播放器');
+      session.debugLog.finish('no_player').catch(() => {});
+      session.debugLog = LT.LiveLog.NOOP;
+      session.phase = 'idle';
+      return null;
+    }
+    caption.mount(player);
+    caption.applySettings(settings);
+    caption.clear();
+    return { runSettings, liveProvider, key, video, reason, videoId, runTempContext };
+  }
+
   async function start(reason) {
     if (session.phase !== 'idle') return;
     videoStartPending = false;
@@ -279,42 +319,9 @@ globalThis.LT = globalThis.LT || {};
     pushStatus();
 
     try {
-      const runSettings = await LT.Settings.load();
-      if (!isCurrent()) return;
-      settings = runSettings;
-
-      const liveProvider = runSettings.liveProvider === 'qwen' ? 'qwen' : 'gemini';
-      session.debugLog = LT.LiveLog.open({
-        level: runSettings.debugLogLevel,
-        provider: liveProvider,
-        model: liveProvider === 'qwen' ? LT.QWEN_MODEL : LT.MODEL,
-        videoId,
-        sourceLang: runSettings.sourceLang,
-        targetLang: runSettings.targetLang,
-        reason,
-      }, runSettings) || LT.LiveLog.NOOP;
-      const key = liveProvider === 'qwen' ? runSettings.qwenApiKey : LT.Settings.pickKey(runSettings);
-      if (!key) {
-        onConnState(`error:未配置${liveProvider === 'qwen' ? '千问' : ' Gemini'} API Key，请在扩展设置里填写`);
-        session.debugLog.finish('missing_key').catch(() => {});
-        session.debugLog = LT.LiveLog.NOOP;
-        session.phase = 'idle';
-        return;
-      }
-
-      const video = await LT.YouTube.waitForVideo();
-      if (!isCurrent()) return;
-      const player = LT.YouTube.player();
-      if (!player || !video) {
-        onConnState('error:没有找到播放器');
-        session.debugLog.finish('no_player').catch(() => {});
-        session.debugLog = LT.LiveLog.NOOP;
-        session.phase = 'idle';
-        return;
-      }
-      caption.mount(player);
-      caption.applySettings(settings);
-      caption.clear();
+      const run = await resolveRunInputs({ reason, videoId, runTempContext }, isCurrent);
+      if (!run || !isCurrent()) return;
+      const { runSettings, liveProvider, key, video } = run;
 
       // ---- 冻结本场快照 ----
       let meta = currentMeta;
