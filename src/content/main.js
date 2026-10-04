@@ -405,6 +405,26 @@ globalThis.LT = globalThis.LT || {};
     });
   }
 
+  async function attachAudio({ video }, isCurrent) {
+    const tap = new LT.AudioTap({
+      onChunk: (u8) => {
+        if (!isCurrent() || !session.client) return;
+        session.debugLog.audioChunk(u8.byteLength);
+        session.client.feedChunk(u8);
+      },
+      onLevel: (pct) => {
+        if (!isCurrent()) return;
+        session.level = pct;
+      },
+    });
+    session.tap = tap;
+    const mode = await tap.attach(video);
+    if (!isCurrent()) { tap.detach(); return false; }
+    session.mode = mode;
+    session.debugLog.event('audio_capture', { mode });
+    return true;
+  }
+
   async function start(reason) {
     if (session.phase !== 'idle') return;
     videoStartPending = false;
@@ -430,23 +450,7 @@ globalThis.LT = globalThis.LT || {};
 
       session.client = buildClient(run, frozen, isCurrent);
 
-      // ---- 音频旁路 ----
-      const tap = new LT.AudioTap({
-        onChunk: (u8) => {
-          if (!isCurrent() || !session.client) return;
-          session.debugLog.audioChunk(u8.byteLength);
-          session.client.feedChunk(u8);
-        },
-        onLevel: (pct) => {
-          if (!isCurrent()) return;
-          session.level = pct;
-        },
-      });
-      session.tap = tap;
-      const mode = await tap.attach(run.video);
-      if (!isCurrent()) { tap.detach(); return; }
-      session.mode = mode;
-      session.debugLog.event('audio_capture', { mode });
+      if (!(await attachAudio(run, isCurrent)) || !isCurrent()) return;
       session.startedAt = Date.now();
       session.lastOutputAt = 0;
       session.phase = 'running';
