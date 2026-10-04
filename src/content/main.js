@@ -347,6 +347,22 @@ globalThis.LT = globalThis.LT || {};
     return { prompt, generated };
   }
 
+  function buildStabilizer({ runSettings, liveProvider, video }, isCurrent) {
+    return new LT.SubtitleStabilizer({
+      idleCommitMs: runSettings.stabIdleMs,
+      maxCurrentChars: runSettings.stabMaxChars,
+      detectOverlap: liveProvider !== 'qwen',
+      suppressRepeats: liveProvider !== 'qwen',
+      onRender: (current, committed) => {
+        if (!isCurrent()) return;
+        if (committed.length) session.debugLog.event('caption_commit', { lines: committed, videoMs: Math.round(video.currentTime * 1000) }, true);
+        caption.pushCommitted(committed);
+        caption.setCurrent(current);
+        caption.render();
+      },
+    });
+  }
+
   async function start(reason) {
     if (session.phase !== 'idle') return;
     videoStartPending = false;
@@ -370,20 +386,7 @@ globalThis.LT = globalThis.LT || {};
       if (!frozen || !isCurrent()) return;
       const { prompt, generated } = frozen;
 
-      // ---- 字幕稳定器 ----
-      session.stabilizer = new LT.SubtitleStabilizer({
-        idleCommitMs: runSettings.stabIdleMs,
-        maxCurrentChars: runSettings.stabMaxChars,
-        detectOverlap: liveProvider !== 'qwen',
-        suppressRepeats: liveProvider !== 'qwen',
-        onRender: (current, committed) => {
-          if (!isCurrent()) return;
-          if (committed.length) session.debugLog.event('caption_commit', { lines: committed, videoMs: Math.round(video.currentTime * 1000) }, true);
-          caption.pushCommitted(committed);
-          caption.setCurrent(current);
-          caption.render();
-        },
-      });
+      session.stabilizer = buildStabilizer(run, isCurrent);
 
       // ---- Live 客户端 ----
       const Client = liveProvider === 'qwen' ? LT.QwenLiveClient : LT.GeminiLiveClient;
