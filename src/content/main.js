@@ -304,6 +304,49 @@ globalThis.LT = globalThis.LT || {};
     return { runSettings, liveProvider, key, video, reason, videoId, runTempContext };
   }
 
+  async function freezeSnapshot(run, isCurrent) {
+    const { runSettings, liveProvider, videoId, reason, runTempContext } = run;
+    let meta = currentMeta;
+    if (runSettings.useMetadata && (!meta || meta.videoId !== videoId)) {
+      meta = await LT.YouTube.waitForMeta({ videoId: LT.YouTube.videoIdFromUrl(), tries: 4 });
+      if (!isCurrent()) return null;
+      if (meta) currentMeta = meta;
+    }
+    // 等待期间设置页可能发来新配置，本场继续使用启动时读取的那一份。
+    session.debugLog.details({ metadata: meta, manualContext: runSettings.manualContext, tempContext: runTempContext });
+    if (runSettings.generateLiveContext && runSettings.useMetadata && meta) {
+      caption.setStatus(`流译：整理本场背景和术语…（最多等待 ${LT.LiveContext.timeoutMs(runSettings) / 1000} 秒）`, 'warn', false);
+    }
+    const { metadataText, prompt, generated, review } = await prepareContext(runSettings, meta, runTempContext, session.debugLog);
+    if (!isCurrent()) return null;
+    saveReview(review, runSettings, 'session');
+    session.debugLog.details({ generatedContext: generated, generatorRequest: review.generatorRequest,
+      generatorModel: review.generatorModel, generatorProvider: review.generatorProvider,
+      contextTimeoutSeconds: review.contextTimeoutSeconds, contextStatus: review.contextStatus, contextError: review.contextError,
+      prompt: liveProvider === 'gemini' ? prompt : '', qwenPhrases: liveProvider === 'qwen' && generated ? generated.phrases : {}, translation: review.translation });
+    session.debugLog.event('session_config', { provider: liveProvider, generatedTerms: generated ? Object.keys(generated.phrases).length : 0 });
+    session.snapshot = {
+      prompt: liveProvider === 'gemini' ? prompt : '',
+      provider: liveProvider,
+      generatedTerms: generated ? Object.keys(generated.phrases).length : 0,
+      contextStatus: review.contextStatus,
+      sourceLang: runSettings.sourceLang,
+      targetLang: runSettings.targetLang,
+      metaUsed: liveProvider === 'gemini' && !!metadataText,
+      tempUsed: liveProvider === 'gemini' && !!runTempContext,
+      videoId: LT.YouTube.videoIdFromUrl(),
+    };
+    console.info(
+      `[流译] 开始（${reason}）｜${liveProvider === 'qwen' ? '千问 3.8' : 'Gemini 3.5'}｜${LT.sourceLabel(
+        runSettings.sourceLang
+      )} → ${LT.targetLabel(runSettings.targetLang)}｜元数据 ${
+        metadataText ? liveProvider === 'qwen' ? '仅供术语整理' : '已注入' : '未使用'
+      }｜术语整理 ${generated ? `${Object.keys(generated.phrases).length} 条` : '未生成'}｜临时补充 ${runTempContext
+        ? liveProvider === 'qwen' ? generated ? '已供词表整理' : '未应用' : '已注入' : '未使用'}`
+    );
+    return { prompt, generated };
+  }
+
   async function start(reason) {
     if (session.phase !== 'idle') return;
     videoStartPending = false;
@@ -323,45 +366,9 @@ globalThis.LT = globalThis.LT || {};
       if (!run || !isCurrent()) return;
       const { runSettings, liveProvider, key, video } = run;
 
-      // ---- 冻结本场快照 ----
-      let meta = currentMeta;
-      if (runSettings.useMetadata && (!meta || meta.videoId !== videoId)) {
-        meta = await LT.YouTube.waitForMeta({ videoId: LT.YouTube.videoIdFromUrl(), tries: 4 });
-        if (!isCurrent()) return;
-        if (meta) currentMeta = meta;
-      }
-      // 等待期间设置页可能发来新配置，本场继续使用启动时读取的那一份。
-      session.debugLog.details({ metadata: meta, manualContext: runSettings.manualContext, tempContext: runTempContext });
-      if (runSettings.generateLiveContext && runSettings.useMetadata && meta) {
-        caption.setStatus(`流译：整理本场背景和术语…（最多等待 ${LT.LiveContext.timeoutMs(runSettings) / 1000} 秒）`, 'warn', false);
-      }
-      const { metadataText, prompt, generated, review } = await prepareContext(runSettings, meta, runTempContext, session.debugLog);
-      if (!isCurrent()) return;
-      saveReview(review, runSettings, 'session');
-      session.debugLog.details({ generatedContext: generated, generatorRequest: review.generatorRequest,
-        generatorModel: review.generatorModel, generatorProvider: review.generatorProvider,
-        contextTimeoutSeconds: review.contextTimeoutSeconds, contextStatus: review.contextStatus, contextError: review.contextError,
-        prompt: liveProvider === 'gemini' ? prompt : '', qwenPhrases: liveProvider === 'qwen' && generated ? generated.phrases : {}, translation: review.translation });
-      session.debugLog.event('session_config', { provider: liveProvider, generatedTerms: generated ? Object.keys(generated.phrases).length : 0 });
-      session.snapshot = {
-        prompt: liveProvider === 'gemini' ? prompt : '',
-        provider: liveProvider,
-        generatedTerms: generated ? Object.keys(generated.phrases).length : 0,
-        contextStatus: review.contextStatus,
-        sourceLang: runSettings.sourceLang,
-        targetLang: runSettings.targetLang,
-        metaUsed: liveProvider === 'gemini' && !!metadataText,
-        tempUsed: liveProvider === 'gemini' && !!runTempContext,
-        videoId: LT.YouTube.videoIdFromUrl(),
-      };
-      console.info(
-        `[流译] 开始（${reason}）｜${liveProvider === 'qwen' ? '千问 3.8' : 'Gemini 3.5'}｜${LT.sourceLabel(
-          runSettings.sourceLang
-        )} → ${LT.targetLabel(runSettings.targetLang)}｜元数据 ${
-          metadataText ? liveProvider === 'qwen' ? '仅供术语整理' : '已注入' : '未使用'
-        }｜术语整理 ${generated ? `${Object.keys(generated.phrases).length} 条` : '未生成'}｜临时补充 ${runTempContext
-          ? liveProvider === 'qwen' ? generated ? '已供词表整理' : '未应用' : '已注入' : '未使用'}`
-      );
+      const frozen = await freezeSnapshot(run, isCurrent);
+      if (!frozen || !isCurrent()) return;
+      const { prompt, generated } = frozen;
 
       // ---- 字幕稳定器 ----
       session.stabilizer = new LT.SubtitleStabilizer({
