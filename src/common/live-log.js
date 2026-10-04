@@ -27,7 +27,7 @@ globalThis.LT = globalThis.LT || {};
     if (typeof value === 'object') {
       const out = {};
       for (const [key, item] of Object.entries(value).slice(0, 40)) {
-        if (/^(?:key|.*apiKeys?|authorization|token)$/i.test(key)) continue;
+        if (/^(?:key|.*apiKeys?|authorization|token|headers)$/i.test(key)) continue;
         out[key] = safe(item, secrets, max);
       }
       return out;
@@ -145,6 +145,7 @@ globalThis.LT = globalThis.LT || {};
       settings.qwenApiKey,
       settings.ttsGeminiApiKey,
       ...(settings.providers || []).map((p) => p.apiKey),
+      ...(settings.providers || []).flatMap((p) => Object.values(p.headers || {})),
     ].map((x) => String(x || '').trim()).filter(Boolean);
   }
 

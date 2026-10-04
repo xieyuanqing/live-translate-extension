@@ -33,7 +33,7 @@ globalThis.LT = globalThis.LT || {};
   }
   function safeError(error, settings) {
     const secrets = [settings?.ttsGeminiApiKey, ...(LT.Settings.keyList(settings || {})),
-      ...(settings?.providers || []).map(p => p.apiKey)].filter(Boolean);
+      ...(settings?.providers || []).flatMap(p => [p.apiKey, ...Object.values(p.headers || {})])].filter(Boolean);
     let message = String(error?.message || '请求失败，请重试');
     for (const key of secrets) message = message.split(key).join('[API_KEY]');
     return message.replace(/AIza[\w-]{20,}/g, '[API_KEY]').slice(0, 300);

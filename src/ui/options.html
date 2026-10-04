@@ -167,15 +167,18 @@
           <div class="service-tabs" role="group" aria-label="接口类别">
             <a href="#models/text" data-service-tab="text" aria-current="true">文字翻译</a>
             <a href="#models/live" data-service-tab="live">直播翻译</a>
+            <a href="#models/chat" data-service-tab="chat">聊天翻译</a>
             <a href="#models/speech" data-service-tab="speech">语音朗读</a>
           </div>
           <div data-service-panel="text">
             <section class="card">
-              <div class="service-heading"><h3>文字接口</h3><button id="addProvider">新增接口</button></div>
+              <div class="service-heading"><h3>文字接口</h3><div class="provider-create"><label class="sr-only" for="providerPreset">新增接口预设</label><select id="providerPreset"></select><button id="addProvider">新增接口</button></div></div>
+              <p class="muted small preset-note">选预设后新增，会填好协议和地址；已有配置保持独立。模型可手填或从接口获取。</p>
               <p id="providerSetupState" class="setup-state" role="status"></p>
               <div class="provider-picker"><label class="label" for="providerPicker">编辑的接口</label><select id="providerPicker"></select></div>
               <div class="provider-workspace"><div id="providerList" class="provider-list" aria-label="文字接口配置列表"></div><div id="providers" class="providers"></div></div>
             </section>
+            <details class="card service-pending"><summary>专用翻译服务 · 暂未接入</summary><p>DeepL、Google 翻译、百度翻译、有道翻译。这里保留后续接入位置，当前文字接口使用 Gemini 或 OpenAI 兼容协议。</p></details>
           </div>
           <div data-service-panel="live" hidden>
             <p class="service-note">当前使用 <strong id="liveServiceSummary"></strong>。<a href="#live">选择直播接口 →</a></p>
@@ -191,6 +194,11 @@
               <div class="field"><label class="label" for="qwenApiKey">API Key</label><input type="password" id="qwenApiKey" autocomplete="off" placeholder="sk-…" /><p class="muted small">Key 明文保存在本机扩展存储。</p></div>
               <details class="help"><summary>为何需要所有网站权限</summary><p class="muted small">千问要求认证请求头，因此 Chrome 需要「所有网站」权限；扩展只对当前 YouTube 标签页和准确连接地址设置临时握手规则，连上后移除。播放器音频及术语映射发送到该接口。</p></details>
             </details>
+            <details class="card service-pending"><summary>更多直播接口 · 暂未接入</summary><p>OpenAI 实时翻译、Soniox、火山引擎 AST（豆包同传）、Azure Speech、腾讯云、百度智能云。</p><p>仅保留后续接入位置，当前可用接口仍为 Gemini 和千问。</p></details>
+          </div>
+          <div data-service-panel="chat" hidden>
+            <section class="card"><h3>Chrome 本地翻译</h3><p class="muted small">当前聊天使用浏览器本地翻译，无需 API Key。首次需准备语言包，要求 Chrome 支持 Translator API。</p><p class="service-link"><a href="#text">开启聊天翻译 →</a></p></section>
+            <details class="card service-pending"><summary>更多聊天接口 · 暂未接入</summary><p>文字模型批量翻译、Bergamot 本地翻译、Transformers.js / WebGPU 本地模型、自托管 CTranslate2 / MTranServer。</p><p>仅保留后续接入位置，当前不会自动切换或调用这些服务。</p></details>
           </div>
           <div data-service-panel="speech" hidden>
             <p class="service-note">当前使用 <strong id="speechServiceSummary"></strong>。<a href="#speech">选择朗读接口、音色与试听 →</a></p>
@@ -203,6 +211,7 @@
               <div class="field"><label class="label" for="ttsGeminiModel">模型</label><input type="text" id="ttsGeminiModel" list="ttsModelChoices" spellcheck="false" /><datalist id="ttsModelChoices"><option value="gemini-3.1-flash-tts-preview"><option value="gemini-3.8-flash-lite-tts"><option value="gemini-3.8-flash-tts"></datalist></div>
               <details class="help"><summary>了解 Key 复用与模型</summary><p class="muted small">复用时优先使用直播 Key，再使用有 Key 的 Gemini 文字接口；地址仍独立保存。模型可用性和额度以你的项目为准，前往「划词与朗读」试听。</p></details>
             </details>
+            <details class="card service-pending"><summary>更多朗读接口 · 暂未接入</summary><p>Azure Speech TTS、ElevenLabs、MiniMax、豆包 TTS。当前可用接口仍为微软和 Gemini。</p></details>
           </div>
         </section>
 
@@ -267,9 +276,9 @@
           </section>
           <section class="card">
             <h3>备份与恢复</h3><p class="muted small">备份设置、翻译偏好与背景资料，不含字幕缓存。</p>
-            <div class="row mt-14"><button id="exportSettings">导出设置</button><label class="check inline" for="includeKeys"><input type="checkbox" id="includeKeys" /><span>包含 API Key</span></label></div>
+            <div class="row mt-14"><button id="exportSettings">导出设置</button><label class="check inline" for="includeKeys"><input type="checkbox" id="includeKeys" /><span>包含 Key 和请求头</span></label></div>
             <div class="row mt-14"><button id="importSettings">导入设置…</button><label class="sr-only" for="importFile">选择设置备份</label><input type="file" id="importFile" accept="application/json,.json" hidden /></div>
-            <p class="muted small">导入会整体覆盖设置；不含 Key 的备份保留现有 Key。</p>
+            <p class="muted small">导入会整体覆盖设置；不含凭据的备份会保留同一接口现有的 Key 和请求头。</p>
             <div class="row mt-14"><button id="resetSettings" class="danger">恢复默认设置</button><label class="check inline" for="keepKeys"><input type="checkbox" id="keepKeys" checked /><span>保留 Key 与接口配置</span></label></div>
             <p id="dataState" class="muted small"></p>
           </section>

@@ -42,17 +42,30 @@ globalThis.LT = globalThis.LT || {};
       baseUrl,
       key,
       keySource,
+      headers: LT.Settings.normalizeHeaders(p.headers),
       model,
       concurrency: p.concurrency,
       path: p.requestPath || 'auto',
     };
   }
 
+  const hasCredentials = (config) => !!config.key || Object.keys(config.headers || {}).length > 0;
+
+  /** 自定义请求头覆盖同名默认头，所有查询和生成共用这一份鉴权。 */
+  function requestHeaders(config, json = false) {
+    const headers = json ? { 'content-type': 'application/json' } : {};
+    if (config.key) {
+      if (config.apiType === 'openai') headers.authorization = `Bearer ${config.key}`;
+      else headers['x-goog-api-key'] = config.key;
+    }
+    return { ...headers, ...config.headers };
+  }
+
   function buildRequest(config, system, user) {
     if (config.apiType === 'openai') {
       return {
         url: `${config.baseUrl}/chat/completions`,
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${config.key}` },
+        headers: requestHeaders(config, true),
         body: JSON.stringify({
           model: config.model,
           messages: [
@@ -66,7 +79,7 @@ globalThis.LT = globalThis.LT || {};
     }
     return {
       url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:streamGenerateContent?alt=sse`,
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': config.key },
+      headers: requestHeaders(config, true),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
@@ -124,7 +137,9 @@ globalThis.LT = globalThis.LT || {};
   }
 
   function checkConfig(config) {
-    if (!config.key) throw new RequestError('未配置 API Key，请在扩展设置里填写', { fatal: true });
+    if (!hasCredentials(config)) throw new RequestError('未配置 API Key 或鉴权请求头，请在扩展设置里填写', { fatal: true });
+    const invalidHeader = LT.Settings.headerError(config.headers || {});
+    if (invalidHeader) throw new RequestError(invalidHeader, { fatal: true });
     try {
       new URL(config.baseUrl); // eslint-disable-line no-new
     } catch (_) {
@@ -174,8 +189,8 @@ globalThis.LT = globalThis.LT || {};
 
   function listRequest(config) {
     return config.apiType === 'openai'
-      ? { url: `${config.baseUrl}/models`, headers: { authorization: `Bearer ${config.key}` } }
-      : { url: `${config.baseUrl}/v1beta/models?pageSize=200`, headers: { 'x-goog-api-key': config.key } };
+      ? { url: `${config.baseUrl}/models`, headers: requestHeaders(config) }
+      : { url: `${config.baseUrl}/v1beta/models?pageSize=200`, headers: requestHeaders(config) };
   }
 
   /** 列出账号实际可用的模型名。 */
@@ -199,7 +214,7 @@ globalThis.LT = globalThis.LT || {};
       const res = await LT.Net.request({
         method: 'GET',
         url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}`,
-        headers: { 'x-goog-api-key': config.key },
+        headers: requestHeaders(config),
         signal,
         path: config.path,
         timeoutMs: PROBE_TIMEOUT_MS,
@@ -248,5 +263,5 @@ globalThis.LT = globalThis.LT || {};
     return { ok: true, ms: Date.now() - t0, via: out.via, sample: out.text.trim().replace(/\s+/g, ' ').slice(0, 40) };
   }
 
-  LT.TextModel = { RequestError, resolve, buildRequest, collect, translate, modelIds, listModels, probe, generateTest };
+  LT.TextModel = { RequestError, resolve, hasCredentials, buildRequest, collect, translate, modelIds, listModels, probe, generateTest };
 })();

@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased — maintenance (2026-10-05)
+## 0.4.5 — unreleased (2026-10-05)
+
+- Add text-interface presets for DeepSeek, SiliconFlow, Ark, Bailian (Beijing/Singapore), OpenRouter, Groq and Moonshot alongside OpenAI/Gemini. Presets create independent configurations without changing credentials or feature assignments.
+- Replace the native model datalist with an editable, searchable combobox. Opening the arrow shows all fetched models even when a model is already filled in; support keyboard selection and unrestricted manual IDs. Keep the popup within the viewport and discard stale requests after editing or switching configurations.
+- Add custom header name/value rows for both text protocols, model discovery and generation, direct requests and background relay. Support header-only authentication across captions, background generation, comments and selection translation. Hide values by default; omit headers from default backups, preserve local headers during credential-free imports, and redact them from diagnostics.
+- Add a chat-interface tab and folded, explicitly unavailable live/chat/MT/TTS candidate entries. Existing live, local chat and speech providers remain the only working implementations.
+- Syntax/self-tests and 155 simulated regressions pass. Isolated Chromium checks at 1440/390 px in both themes cover list/filter/keyboard/manual entry, custom headers, preset isolation and candidate entries without script errors or horizontal overflow. Permission/network substitutes do not verify native dialogs or real accounts.
 
 - Preserve a metadata description limit of zero instead of replacing it with the default of 1,200 characters.
 - Consolidate purpose-specific provider normalization and use a no-op live logger when diagnostics are disabled.

@@ -34,7 +34,8 @@ globalThis.LT = globalThis.LT || {};
       if (!origins) { missing.push('接口地址'); origins = []; }
     } else {
       const provider = LT.Settings.provider(settings, id);
-      if (!provider.apiKey && !(provider.apiType === 'gemini' && LT.Settings.keyList(settings).length)) missing.push('Key');
+      if (!provider.apiKey && !Object.keys(provider.headers).length && !(provider.apiType === 'gemini' && LT.Settings.keyList(settings).length)) missing.push('Key');
+      if (LT.Settings.headerError(provider.headers)) missing.push('有效请求头');
       const model = provider.apiType === 'gemini' ? provider.model.replace(/^models\//, '') : provider.model;
       if (!model) missing.push('模型');
       origins = httpOrigins(provider.baseUrl || LT.TEXT_DEFAULT_BASE[provider.apiType]);

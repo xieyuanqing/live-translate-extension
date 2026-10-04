@@ -1,6 +1,6 @@
 {
   "name": "live-translate-extension",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "private": true,
   "description": "YouTube subtitles, local chat and on-demand text translation, plus Japanese/English reading with Microsoft and Gemini TTS.",
   "license": "SEE LICENSE IN docs/third-party-tts.md",
@@ -11,7 +11,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "check": "node tools/check.js",
-    "test": "node tools/selftest.js && node --test tools/lifecycle.test.js tools/video-subs.test.js tools/subs-net.test.js tools/page-bridge.test.js tools/youtube.test.js tools/options-ui.test.js",
+    "test": "node tools/selftest.js && node --test tools/lifecycle.test.js tools/video-subs.test.js tools/subs-net.test.js tools/page-bridge.test.js tools/youtube.test.js tools/options-ui.test.js tools/text-interfaces.test.js",
     "package": "node tools/package.js"
   }
 }

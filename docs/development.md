@@ -72,9 +72,15 @@ Detailed logs additionally retain the generator input and Qwen terminology confi
 
 The current UI labels are Chinese and some are also used in prompt composition. Before adding UI localization, separate presentation labels from stable prompt labels so a language toggle cannot silently change model instructions.
 
-## Settings structure (0.4.4)
+## Settings structure (0.4.5)
 
 The nine routes keep their existing ids while their labels become: Start — 接口 / 语言与背景; Features — 实时翻译 / 整片字幕 / 聊天与评论 / 划词与朗读; Appearance and data — 外观 / 数据与备份 / 高级与关于. Interface configuration contains addresses, keys, model names, host permission and connection tests. Each feature page has its own dropdown; editing a configuration never changes these choices. The live page selects both audio and context-generation interfaces, the video page selects subtitles, the text page selects comments, and the speech page selects right-click translation and reading. Chat remains a fixed local Chrome translator, with language-pack preparation in the popup.
+
+Text presets in `LT.TEXT_PRESETS` create ordinary OpenAI-compatible or Gemini configurations; they add no transport. `#models/chat` documents the existing local translator and unavailable candidates. Candidate entries are presentation-only and never enter `LIVE_PROVIDERS` or speech selection. Addresses and source documentation are in [interface-presets.md](interface-presets.md).
+
+Each text provider has a normalized `headers` object. Names are lowercased, blank rows omitted and HTTP-invalid names/values rejected before network calls. `TextModel.resolve` copies headers into the frozen request configuration; list/probe/generation share the same merge, with custom headers overriding defaults. All consumers accept header-only authentication. Direct and relay requests preserve the same headers. Credentials do not alter subtitle cache fingerprints. Default backups omit headers, credential-free imports preserve existing headers by provider id, and diagnostic redaction treats configured header values as secrets.
+
+The model combobox retains a freeform input. Its arrow opens the complete fetched list; typing filters it, and keyboard or pointer selection updates only the model field. Configuration edits abort pending tests and invalidate old lists where connection details changed. Switching the editor disposes pending work. The popup chooses space above or below the input; it uses the existing theme and responsive layout.
 
 `commentProviderId` is initialized from `subsProviderId` only when older settings omit it, then survives independent changes, backups and settings reset/import rules. A comment request freezes that id. Comment cancellation/cache identities remain tied to its endpoint/model and actual prompt; appearance changes do not trigger requests.
 

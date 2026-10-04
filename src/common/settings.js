@@ -14,6 +14,22 @@ globalThis.LT = globalThis.LT || {};
   const color = (v, fallback) => (/^#[0-9a-f]{6}$/i.test(String(v || '')) ? String(v).toLowerCase() : fallback);
   const newProviderId = () => `p-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
+  /** 请求头名称不区分大小写；兼容旧设置中没有 headers 的情况。 */
+  function normalizeHeaders(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw)
+      .filter(([name, value]) => name.trim() && typeof value === 'string' && value.trim())
+      .map(([name, value]) => [name.trim().toLowerCase(), value.trim()]));
+  }
+
+  function headerError(headers) {
+    for (const [name, value] of Object.entries(headers)) {
+      if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(name)) return '请求头名称只能使用英文字母、数字和 HTTP 允许的符号';
+      if (/[^\t\x20-\x7e\x80-\xff]/.test(value)) return '请求头值不能包含换行或非 Latin-1 字符';
+    }
+    return '';
+  }
+
   /** 一套文字模型接口配置的范围收敛；缺 id 时补一个。 */
   function normalizeProvider(raw) {
     const p = raw && typeof raw === 'object' ? raw : {};
@@ -23,6 +39,7 @@ globalThis.LT = globalThis.LT || {};
       apiType: p.apiType === 'openai' ? 'openai' : 'gemini',
       baseUrl: String(p.baseUrl || '').trim().replace(/\/+$/, ''),
       apiKey: String(p.apiKey || '').trim(),
+      headers: normalizeHeaders(p.headers),
       model: String(p.model || '').trim(),
       concurrency: clamp(Number(p.concurrency) || 3, 1, 6),
       requestPath: REQUEST_PATHS.includes(p.requestPath) ? p.requestPath : 'auto',
@@ -98,6 +115,8 @@ globalThis.LT = globalThis.LT || {};
   LT.Settings = {
     normalize,
     normalizeProvider,
+    normalizeHeaders,
+    headerError,
 
     /** HTTP 接口的 Chrome 主机权限不包含端口；设置授权、后台检查必须使用同一模式。 */
     hostPattern(value) {

@@ -10,7 +10,7 @@ Selected text can also be translated from the right-click menu or read aloud in 
 [![Checks](https://github.com/xieyuanqing/live-translate-extension/actions/workflows/check.yml/badge.svg)](https://github.com/xieyuanqing/live-translate-extension/actions/workflows/check.yml)
 [![Core MIT License](https://img.shields.io/badge/core-MIT-blue.svg)](LICENSE) · [Private TTS adapter: GPLv3](docs/third-party-tts.md)
 
-**Development version 0.4.4 (unreleased).** A standalone Chrome Manifest V3 extension. The current interface is in Simplified Chinese. Install it manually for now; it is not listed in a browser extension store.
+**Development version 0.4.5 (unreleased).** A standalone Chrome Manifest V3 extension. The current interface is in Simplified Chinese. Install it manually for now; it is not listed in a browser extension store.
 
 Settings and the popup share light and soft neutral-gray dark themes. Choose system appearance (default), light, or dark under Settings → 外观; the popup also has a theme button. The popup has a fixed 420 px width, rounded groups, blue actions, and switches. Language choices come first; connection/audio details appear while translation runs.
 
@@ -88,7 +88,7 @@ The two subtitle modes share the caption layer and settings. Qwen 3.8 detects th
 
 ## Install
 
-1. For this development version, use a locally built `live-translate-extension-0.4.4.zip`, or load this checkout directly. [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) contains published versions; 0.4.4 has not been published yet.
+1. For this development version, use a locally built `live-translate-extension-0.4.5.zip`, or load this checkout directly. [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) contains published versions; 0.4.5 has not been published yet.
 2. Extract it into a permanent folder. Keep that folder after installation.
 3. Open `chrome://extensions/` and turn on **Developer mode**.
 4. Choose **Load unpacked** and select the extracted folder containing `manifest.json`.
@@ -109,7 +109,11 @@ Configure only the mode you want to use. Live audio and whole-video subtitles do
 
 Gemini keys can be obtained from [Google AI Studio](https://aistudio.google.com/apikey). Gemini Live uses a WSS endpoint; Qwen accepts the specified Bailian workspace hosts and requires the visible **所有网站权限 → 授权** action for its authenticated WebSocket. The extension limits its temporary header rule to the current YouTube tab and exact Qwen URL, then removes it after the handshake.
 
-Text interfaces support OpenAI-compatible base URLs (usually ending in `/v1`) and Gemini. New interfaces use OpenAI-compatible format; existing types remain intact. A Gemini text interface with no separate key reuses the Gemini Live key. Model names start empty: **列出可用模型** lists your account's available models. **查询接口** checks metadata and does not prove generation works; **生成测试** sends a tiny request through the translation path and uses some quota. Declining browser permission stops that request.
+Text interfaces support OpenAI-compatible base URLs and Gemini. Choose a preset before **新增接口** to fill in its protocol and address: DeepSeek, SiliconFlow, Volcengine Ark, Alibaba Bailian (Beijing/Singapore), OpenRouter, Groq, Moonshot, OpenAI or Gemini; choose **自定义接口** for other endpoints. This creates an independent configuration and preserves existing credentials and feature choices. A Gemini text interface with no separate key reuses the Gemini Live key.
+
+Enter a model ID directly, or click **获取模型**. The arrow always opens the full returned list; typing filters it, and arrow keys plus Enter select a model. A model can be entered even when the service does not expose a model list. **查询接口** only checks metadata; **生成测试** sends a tiny request through the translation path and uses some quota. Declining browser permission stops that request.
+
+**自定义请求头** accepts name/value rows, such as `X-Api-Key`, `Authorization` or `X-Tenant`. They apply to text-model discovery, tests, background generation, whole-video captions, comments and selected-text translation, including background relay. Names are case-insensitive and custom values override matching default headers; header-only authentication is supported. This does not configure live WebSocket or speech credentials. The new chat tab retains Chrome's local translator, while folded candidate lists are clearly marked **暂未接入** and cannot be selected. See [preset addresses and scope](docs/interface-presets.md).
 
 Live streams use `gemini-3.5-live-translate-preview` by default or `qwen3.8-livetranslate-flash-realtime` when selected. Model availability and API charges depend on your provider account. The background generator uses its independently selected text model once per live start. Its deadline defaults to 60 seconds and can be set to 30, 60, or 120 seconds in **实时翻译 → AI 整理**, covering connection, model waiting, and the complete answer; a matching pre-start preview is reused without another request. Failure falls back to the basic Gemini prompt or Qwen without generated terms. Installing this extension does not include API credits.
 
@@ -151,9 +155,9 @@ Chat translation runs locally through Chrome; the extension does not send chat t
 
 Selection translation sends the selected text to its chosen text-model endpoint. Clicking playback sends it to the selected Microsoft/Gemini speech service. Text/results stay in page memory, and at most three synthesized clips are cached in worker memory, valid for replay for ten minutes; no audio file is saved by default. Gemini TTS keys are stored without application-level encryption like other keys; settings exports exclude them unless you explicitly include keys. Reading uses a separate extension player and does not change the YouTube audio graph.
 
-The API key, translation preferences, and persistent notes are stored in `chrome.storage.local`. The key is currently stored **without application-level encryption**. Temporary notes and live captions stay in page memory **unless detailed debug logging is enabled**; that mode persists the metadata, notes, prompt, source transcription, and translations locally until deleted or rotated out. Logging is off by default. Basic logs omit speech and prompt content. Logs do not store raw audio and redact configured API keys; review an exported file before sharing it. Each session keeps at most 3,000 events and only the latest 20 completed sessions are retained. **Whole-video subtitles, both source text and translations, are persisted in the extension's local storage.** They do not expire automatically and can be deleted from Settings.
+API keys, custom request headers, translation preferences, and persistent notes are stored in `chrome.storage.local`. Keys and headers are stored **without application-level encryption**. Default exports omit both; importing such a backup preserves credentials for matching interface ids. Temporary notes and live captions stay in page memory **unless detailed debug logging is enabled**; that mode persists the metadata, notes, prompt, source transcription, and translations locally until deleted or rotated out. Logging is off by default. Basic logs omit speech and prompt content. Logs do not store raw audio and redact configured API keys; review an exported file before sharing it. Each session keeps at most 3,000 events and only the latest 20 completed sessions are retained. **Whole-video subtitles, both source text and translations, are persisted in the extension's local storage.** They do not expire automatically and can be deleted from Settings.
 
-Use your own key on a computer you trust. Do not put keys in source code, issues, screenshots, or release packages. A custom proxy or third-party endpoint receives the requests routed through it, including the API key. Each provider's handling of submitted data is governed by its own terms; this project cannot promise that a provider never retains data.
+Use your own key on a computer you trust. Do not put keys in source code, issues, screenshots, or release packages. A custom proxy or third-party endpoint receives the requests routed through it, including the API key and custom headers. Each provider's handling of submitted data is governed by its own terms; this project cannot promise that a provider never retains data.
 
 Public store distribution, including its consent flow and privacy disclosures, will be handled separately.
 
@@ -167,7 +171,7 @@ Public store distribution, including its consent flow and privacy disclosures, w
 | Connected, but no captions | Play spoken audio, unmute the player, and check the input-level bar in the popup. Silence alone does not mean the connection failed. |
 | "No caption track" for a video | The video has no captions, or auto captions are not generated yet. Setting 听什么 to auto-detect relaxes track selection. |
 | The caption endpoint returned no usable content | YouTube's caption endpoint requires the player's own validation parameters. The error names the paths that were tried; `await LT.debug.probeCaptions()` in the content-script console shows the full log. Turn CC on once in the player and retry; if it still fails, the endpoint may have changed. |
-| The text model returns 404 / 401 | Check the model name, whether the base URL ends at `/v1`, and whether the key can access that model. |
+| The text model returns 404 / 401 | Check the model name, whether the base URL matches the service documentation, and whether the key can access that model. |
 | A third-party endpoint reports CORS or "not authorized" | Use **接口地址下的授权** in Settings; requests can then be relayed through the background worker. Permission matching ignores ports consistently, including local gateways; request URLs keep their ports. |
 | Chat asks to prepare translation, or reports an unsupported API | Click **准备本地翻译** in the extension popup. Use a desktop Chrome with Translator support; selecting a specific source language avoids requiring Language Detector. |
 | No comment translation buttons or no visible comments to translate | Enable comment translation, scroll to the comment area, and expand the replies you want. Comments not yet loaded are not fetched. |
@@ -180,6 +184,7 @@ The implementation rotates Gemini connections every 505 seconds by default and Q
 ## Current limits
 
 - Chrome is the tested browser. Other Chromium browsers and their stores have not been validated.
+- The 0.4.5 interface update passes 155 simulated regressions plus syntax/self-tests. An isolated Chromium fixture checks model list/filter/keyboard/manual entry, header editing and persistence, presets, and placeholders at 1440/390 px in both themes, without horizontal overflow or script errors. Permissions and upstream services are substitutes, not real account verification.
 - The 0.4.4 settings update passes syntax checks for 66 JavaScript files, self-tests and all 144 simulated regressions. It is also checked in an isolated in-memory Chromium fixture at 1440/1024/390 px in both themes: all nine pages, independent feature choices, denied permissions, stale test results, three appearance tabs, and no script errors or horizontal overflow. With two example interfaces, advanced fields folded and first-use guidance visible, the 390 px text-interface page measures 1,413 px high, down from the earlier 2,314 px screenshot. Permissions and models use substitutes; native Chrome permission dialogs, real service accounts and current YouTube flows remain unverified.
 - The 0.4.2 test package passes syntax/self-tests and 121 simulated regressions. An isolated Chromium fixture checks the one-button control, independent provider and target-language switching, the compact reading/loading states, pinning, long-text expansion, and 390 px panel layout. The updated control has not been checked on a real YouTube watch page.
 - Earlier 0.4.0 checks verified the former two-button placement on a real YouTube watch page in an isolated Chromium profile. Microsoft Japanese/English synthesis and extension audio playback were tested against the real service there. Gemini requests/playback and selection translation used network substitutes; real Gemini TTS access and listening quality, first-use Chrome language-pack downloads, and live/whole-video model actions on the current YouTube site still require user testing.
@@ -202,7 +207,7 @@ npm run check
 npm run package
 ```
 
-`check` runs JavaScript syntax checks, version consistency, self-tests (audio, live captions, prompts, json3 parsing, segmentation, chunk validation, playback scheduling), session lifecycle, live-log redaction and retention, Qwen protocol/authentication, whole-video subtitle tasks, and selection/TTS cancellation, language, formats and resource cleanup. `package` creates `dist/live-translate-extension-0.4.4.zip` with `manifest.json` at its root and only the runtime files.
+`check` runs JavaScript syntax checks, version consistency, self-tests (audio, live captions, prompts, json3 parsing, segmentation, chunk validation, playback scheduling), session lifecycle, live-log redaction and retention, Qwen protocol/authentication, whole-video subtitle tasks, and selection/TTS cancellation, language, formats and resource cleanup. `package` creates `dist/live-translate-extension-0.4.5.zip` with `manifest.json` at its root and only the runtime files.
 
 The same checks and package verification run in GitHub Actions. Automated tests simulate browser callbacks, WebSockets, caption tracks, and model responses; they do not exercise real Gemini access, live audio capture, or YouTube's caption endpoint.
 

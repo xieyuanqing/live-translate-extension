@@ -98,3 +98,12 @@ test('单独给的超时时间优先于默认两分钟', async () => {
   await assert.rejects(h.net.request({ ...req, method: 'GET', timeoutMs: 5 }), /超时/);
   assert.ok(Date.now() - t0 < 1000);
 });
+
+test('自定义鉴权头在直连失败转后台时原样保留', async () => {
+  const sent = [], direct = [];
+  const h = harness(async (_url, init) => { direct.push(init.headers); throw new TypeError('CORS'); }, sent);
+  const headers = { 'x-api-key': 'test-only-header', 'x-region': 'test-region' };
+  await h.net.request({ ...req, method: 'GET', headers });
+  assert.deepEqual(direct[0], headers);
+  assert.deepEqual(sent[0].headers, headers);
+});

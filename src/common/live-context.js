@@ -81,7 +81,7 @@ globalThis.LT = globalThis.LT || {};
   async function generate(settings, metadataText, notes = '') {
     if (!settings.generateLiveContext || !metadataText || !LT.TextModel || !LT.Net) return null;
     const config = LT.TextModel.resolve(settings, settings.liveContextProviderId);
-    if (!config.key || !config.model) return null;
+    if (!LT.TextModel.hasCredentials(config) || !config.model) return null;
     const deadline = timeoutMs(settings);
     try {
       const { system, user } = buildRequest(settings, metadataText, notes);

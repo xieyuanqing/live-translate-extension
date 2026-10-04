@@ -401,7 +401,7 @@ globalThis.LT = globalThis.LT || {};
       let { cachedMeta } = source;
       const { units, trackKey, trackLabel, isAsr, sourceHash } = source;
       const requireModel = () => {
-        if (!config.key) throw new Error('未配置 API Key，请在扩展设置里填写');
+        if (!LT.TextModel.hasCredentials(config)) throw new Error('未配置 API Key 或鉴权请求头，请在扩展设置里填写');
         if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
       };
 

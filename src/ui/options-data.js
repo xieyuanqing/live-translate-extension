@@ -16,19 +16,19 @@ globalThis.LT = globalThis.LT || {};
     return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
   };
 
-  /** 导出对象：默认剔除 Key；providers 里的 apiKey 也剔除。 */
+  /** 默认剔除 Key 和可能携带凭据的自定义请求头。 */
   function exportObject(settings, includeKeys, version) {
     const copy = JSON.parse(JSON.stringify(LT.Settings.normalize(settings)));
     if (!includeKeys) {
       copy.apiKeys = '';
       copy.qwenApiKey = '';
       copy.ttsGeminiApiKey = '';
-      for (const p of copy.providers) p.apiKey = '';
+      for (const p of copy.providers) { p.apiKey = ''; p.headers = {}; }
     }
     return { app: APP, version, exportedAt: new Date().toISOString(), includesKeys: !!includeKeys, settings: copy };
   }
 
-  /** 校验并合并导入文件：不含 Key 时保留现有 Key（按接口配置 id 对应）。 */
+  /** 校验并合并导入文件：不含凭据时保留现有 Key 和请求头（按接口配置 id 对应）。 */
   function importObject(raw, current) {
     if (!raw || raw.app !== APP || !raw.settings || typeof raw.settings !== 'object') {
       throw new Error('这不是流译的设置文件');
@@ -39,9 +39,11 @@ globalThis.LT = globalThis.LT || {};
       next.qwenApiKey = current.qwenApiKey;
       next.ttsGeminiApiKey = current.ttsGeminiApiKey;
       for (const p of next.providers) {
-        if (p.apiKey) continue;
         const own = (current.providers || []).find((q) => q.id === p.id);
-        if (own) p.apiKey = own.apiKey;
+        if (own) {
+          if (!p.apiKey) p.apiKey = own.apiKey;
+          if (!Object.keys(p.headers).length) p.headers = { ...own.headers };
+        }
       }
     }
     return next;
@@ -192,7 +194,7 @@ globalThis.LT = globalThis.LT || {};
       const includeKeys = $('includeKeys').checked;
       const out = exportObject(ctx.settings(), includeKeys, ctx.version);
       download(`${APP}-settings-${stamp()}.json`, JSON.stringify(out, null, 2));
-      state(includeKeys ? '已导出（包含 API Key，请妥善保管文件）' : '已导出（不含 API Key）');
+      state(includeKeys ? '已导出（包含 Key 和请求头，请妥善保管文件）' : '已导出（不含 Key 和请求头）');
     });
 
     $('importSettings').addEventListener('click', () => $('importFile').click());
@@ -209,7 +211,7 @@ globalThis.LT = globalThis.LT || {};
         state(`导入失败：${err && err.message ? err.message : '文件无法解析'}`);
         return;
       }
-      const summary = `${next.scenes.length} 项翻译偏好、${next.providers.length} 套接口配置、${raw.includesKeys ? '包含' : '不含'} API Key`;
+      const summary = `${next.scenes.length} 项翻译偏好、${next.providers.length} 套接口配置、${raw.includesKeys ? '包含' : '不含'} Key 和请求头`;
       if (!confirm(`用文件里的设置覆盖当前设置？\n${summary}\n字幕缓存不受影响。`)) return;
       await ctx.replace(next);
     });

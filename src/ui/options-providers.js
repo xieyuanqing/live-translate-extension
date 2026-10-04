@@ -39,6 +39,96 @@ globalThis.LT = globalThis.LT || {};
     return err.message || String(err);
   }
 
+  /** 可手填的模型选择器：展开显示全部，输入才筛选，不依赖浏览器 datalist。 */
+  function modelPicker(input, id, onChange) {
+    const root = el('div', 'model-picker');
+    const row = el('div', 'model-input-row');
+    const toggle = el('button', 'model-toggle', '▾');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-label', '展开模型列表');
+    toggle.setAttribute('aria-controls', id);
+    const list = el('div', 'model-options');
+    list.id = id;
+    list.hidden = true;
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', '模型列表');
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', id);
+    input.setAttribute('aria-expanded', 'false');
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    row.append(input, toggle);
+    root.append(row, list);
+    let ids = [], shown = [], active = -1;
+    const close = () => {
+      list.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      toggle.setAttribute('aria-label', '展开模型列表');
+    };
+    const select = (value) => {
+      input.value = value;
+      onChange(value);
+      close();
+      input.focus();
+    };
+    function highlight() {
+      Array.from(list.children).forEach((node, i) => {
+        node.setAttribute('data-active', String(i === active));
+      });
+      if (active >= 0) {
+        input.setAttribute('aria-activedescendant', `${id}-${active}`);
+        list.children[active].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    function show(filter = '') {
+      shown = ids.filter(value => value.toLowerCase().includes(filter.toLowerCase()));
+      active = -1;
+      list.replaceChildren();
+      input.removeAttribute('aria-activedescendant');
+      for (const [i, value] of shown.entries()) {
+        const item = el('div', 'model-option', value);
+        item.id = `${id}-${i}`;
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', String(value === input.value));
+        item.addEventListener('pointerdown', event => event.preventDefault());
+        item.addEventListener('click', () => select(value));
+        list.appendChild(item);
+      }
+      if (!shown.length) list.appendChild(el('p', 'model-empty', ids.length
+        ? '没有匹配项，可直接使用手填的模型 ID。' : '尚无列表，点击「获取模型」或直接手填模型 ID。'));
+      list.hidden = false;
+      const rect = root.getBoundingClientRect();
+      const below = window.innerHeight - rect.bottom;
+      const above = below < 240 && rect.top > below;
+      list.setAttribute('data-side', above ? 'above' : 'below');
+      list.style.maxHeight = `${Math.min(240, (above ? rect.top : below) - 12)}px`;
+      input.setAttribute('aria-expanded', 'true');
+      toggle.setAttribute('aria-label', '收起模型列表');
+    }
+    toggle.addEventListener('click', () => {
+      if (list.hidden) { show(); input.focus(); } else close();
+    });
+    input.addEventListener('input', () => { onChange(input.value); show(input.value); });
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Escape' || event.key === 'Tab') { close(); return; }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (list.hidden) show();
+        if (shown.length) {
+          active = event.key === 'ArrowDown' ? (active + 1) % shown.length : (active < 0 ? shown.length - 1 : (active + shown.length - 1) % shown.length);
+          highlight();
+        }
+      } else if (event.key === 'Enter' && !list.hidden && active >= 0) {
+        event.preventDefault();
+        select(shown[active]);
+      }
+    });
+    root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget)) close(); });
+    return { root, close, show, setItems(values) { ids = [...new Set(values)].sort((a, b) => a.localeCompare(b)); close(); } };
+  }
+
   /**
    * @param {{box: HTMLElement, list?: HTMLElement, picker?: HTMLSelectElement, settings: () => object, save: () => void, onTest?: Function}} ctx
    */
@@ -137,19 +227,17 @@ globalThis.LT = globalThis.LT || {};
       model.placeholder = '填写你的接口实际支持的模型名';
       model.value = provider.model;
       modelField.appendChild(fieldLabel(model, 'model', '模型'));
-      const listId = `models-${provider.id}`;
-      model.setAttribute('list', listId);
-      const datalist = el('datalist');
-      datalist.id = listId;
-      const listBtn = el('button', 'small nowrap', '列出可用模型');
-      modelRow.append(model, listBtn);
-      const listState = el('p', 'muted small');
-      modelField.append(modelRow, datalist, listState);
-      model.addEventListener('input', () => {
-        provider.model = model.value;
+      const picker = modelPicker(model, `models-${provider.id}`, value => {
+        provider.model = value;
+        invalidate();
         ctx.save();
         renderList();
       });
+      const listBtn = el('button', 'small nowrap', '获取模型');
+      modelRow.append(picker.root, listBtn);
+      const listState = el('p', 'muted small model-list-state', '可直接填写模型 ID，也可获取列表后选择。');
+      listState.setAttribute('role', 'status');
+      modelField.append(modelRow, listState);
 
       // ---- 地址 ----
       const baseField = el('div', 'field');
@@ -177,6 +265,7 @@ globalThis.LT = globalThis.LT || {};
       key.value = provider.apiKey;
       key.addEventListener('input', () => {
         provider.apiKey = key.value;
+        invalidate(true);
         ctx.save();
       });
       keyField.append(keyLabel, key, el('p', 'muted small key-storage-note', 'Key 明文保存在本机扩展存储。'));
@@ -194,7 +283,53 @@ globalThis.LT = globalThis.LT || {};
         el('p', 'muted small', '查询不消耗生成额度；生成测试会消耗少量额度。')
       );
 
-      // ---- 高级只保留性能与转发选项；必需的授权始终放在地址下方 ----
+      // ---- 自定义请求头与高级网络参数 ----
+      const headerDetails = el('details', 'custom-headers');
+      const headerSummary = el('summary');
+      const headerRows = el('div', 'header-rows');
+      const headerState = el('p', 'muted small');
+      const addHeader = el('button', 'ghost small', '添加请求头');
+      const showHeaders = el('button', 'ghost small', '显示值');
+      let valuesVisible = false;
+      const rows = Object.entries(provider.headers).map(([name, value]) => ({ name, value }));
+      headerDetails.open = rows.length > 0;
+      const saveHeaders = () => {
+        provider.headers = LT.Settings.normalizeHeaders(Object.fromEntries(rows.map(row => [row.name, row.value])));
+        headerSummary.textContent = `自定义请求头${Object.keys(provider.headers).length ? ` · ${Object.keys(provider.headers).length} 项` : ''}`;
+        headerState.textContent = LT.Settings.headerError(provider.headers);
+        invalidate(true);
+        ctx.save();
+      };
+      function renderHeaders() {
+        headerRows.replaceChildren();
+        for (const row of rows) {
+          const group = el('div', 'header-row');
+          const name = el('input'), value = el('input'), remove = el('button', 'ghost small', '移除');
+          name.type = 'text'; value.type = valuesVisible ? 'text' : 'password';
+          name.placeholder = '名称，如 X-Api-Key'; value.placeholder = '请求头值';
+          name.setAttribute('aria-label', '请求头名称'); value.setAttribute('aria-label', '请求头值');
+          name.autocomplete = 'off'; value.autocomplete = 'off'; name.spellcheck = false; value.spellcheck = false;
+          name.value = row.name; value.value = row.value;
+          name.addEventListener('input', () => { row.name = name.value; saveHeaders(); });
+          value.addEventListener('input', () => { row.value = value.value; saveHeaders(); });
+          remove.addEventListener('click', () => { rows.splice(rows.indexOf(row), 1); saveHeaders(); renderHeaders(); });
+          group.append(name, value, remove);
+          headerRows.appendChild(group);
+        }
+      }
+      headerSummary.textContent = `自定义请求头${rows.length ? ` · ${rows.length} 项` : ''}`;
+      addHeader.addEventListener('click', () => { rows.push({ name: '', value: '' }); renderHeaders(); });
+      showHeaders.addEventListener('click', () => {
+        valuesVisible = !valuesVisible;
+        showHeaders.textContent = valuesVisible ? '隐藏值' : '显示值';
+        renderHeaders();
+      });
+      renderHeaders();
+      const headerActions = el('div', 'row');
+      headerActions.append(addHeader, showHeaders);
+      headerDetails.append(headerSummary, el('p', 'muted small', '用于需要额外鉴权或参数的文字接口。同名项覆盖默认请求头，也可只用请求头鉴权。'),
+        headerRows, headerActions, headerState, el('p', 'muted small', '请求头与 Key 一样明文保存在本机，默认备份不包含这些值。'));
+      root.appendChild(headerDetails);
       const adv = el('details', 'advanced');
       adv.appendChild(el('summary', null, '高级：并发与请求路径'));
       const advTwo = el('div', 'two');
@@ -223,6 +358,7 @@ globalThis.LT = globalThis.LT || {};
       pathSel.value = provider.requestPath;
       pathSel.addEventListener('change', () => {
         provider.requestPath = pathSel.value;
+        invalidate();
         ctx.save();
       });
       pathField.append(pathSel, el('p', 'muted small', '官方接口页面直连即可；第三方地址跨域被拒时会改走扩展后台。'));
@@ -243,82 +379,93 @@ globalThis.LT = globalThis.LT || {};
       };
       type.addEventListener('change', () => {
         provider.apiType = type.value;
+        invalidate(true);
         ctx.save();
         refreshHints();
         renderList();
       });
       base.addEventListener('input', () => {
         provider.baseUrl = base.value;
+        invalidate(true);
         ctx.save();
         access.refresh();
       });
       refreshHints();
 
       // ---- 测试与列出模型：按归一化后的配置发请求，不改动正在编辑的对象 ----
-      const config = () => LT.TextModel.resolve(LT.Settings.normalize(ctx.settings()), provider.id);
+      let revision = 0, pending = null;
+      accessWidgets.push({ dispose() { revision++; pending?.abort(); } });
       const busy = (on) => {
         test.disabled = on;
         gen.disabled = on;
         listBtn.disabled = on;
       };
-      const fillList = (ids) => {
-        datalist.replaceChildren();
-        for (const id of ids) {
-          const o = el('option');
-          o.value = id;
-          datalist.appendChild(o);
+      function invalidate(clearModels = false) {
+        revision++;
+        pending?.abort();
+        pending = null;
+        busy(false);
+        testState.textContent = '';
+        if (clearModels) {
+          picker.setItems([]);
+          listState.textContent = '连接配置已修改，请重新获取模型；也可直接手填。';
+          listBtn.textContent = '获取模型';
         }
-        listState.textContent = `共 ${ids.length} 个可用模型，点模型名输入框可选`;
+      }
+      const fillList = (ids) => {
+        picker.setItems(ids);
+        listBtn.textContent = '刷新列表';
+        listState.textContent = `已获取 ${new Set(ids).size} 个模型。点右侧箭头查看全部，输入文字可筛选。`;
       };
       const viaNote = (via) => (via === 'relay' ? ' · 经后台转发' : '');
-      test.addEventListener('click', async () => {
+      async function runRequest(kind) {
+        const ticket = ++revision;
+        pending?.abort();
+        const controller = pending = new AbortController();
+        const current = () => ticket === revision;
+        const state = kind === 'list' ? listState : testState;
         busy(true);
-        testState.textContent = '测试中…';
-        try {
-          if (!await access.authorize()) { testState.textContent = '未获得域名权限，请在接口地址下方授权后重试。'; return; }
-          const r = await LT.TextModel.probe(config());
-          testState.textContent = `${r.ok ? '✓' : '✗'} ${r.message}${r.ms ? ` · ${r.ms} ms` : ''}${viaNote(r.via)}`;
-          if (Array.isArray(r.models) && r.models.length) fillList(r.models);
-        } catch (err) {
-          testState.textContent = `✗ ${describeError(err)}`;
-        } finally {
-          busy(false);
-        }
-      });
-      gen.addEventListener('click', async () => {
-        busy(true);
-        testState.textContent = '生成测试中…';
+        state.textContent = kind === 'list' ? '正在获取模型…' : kind === 'generate' ? '生成测试中…' : '查询中…';
         let testedConfig, testedSettingsSignature;
         try {
-          if (!await access.authorize()) { testState.textContent = '未获得域名权限，未发送生成请求。'; return; }
-          const testedSettings = LT.Settings.normalize(ctx.settings());
-          testedConfig = LT.TextModel.resolve(testedSettings, provider.id);
-          // 多 Key 的一次请求只随机用一个；完整列表也冻结，不能验证后来改过的列表。
-          testedSettingsSignature = LT.OptionsUI.providerSignature(testedSettings, provider.id);
-          const r = await LT.TextModel.generateTest(testedConfig);
-          ctx.onTest?.({ providerId: provider.id, signature: JSON.stringify(testedConfig), settingsSignature: testedSettingsSignature, ok: true });
-          testState.textContent = `✓ 生成测试通过 · ${r.ms} ms${viaNote(r.via)} · 回复「${r.sample}」`;
+          const snapshot = LT.Settings.normalize(ctx.settings());
+          testedConfig = LT.TextModel.resolve(snapshot, provider.id);
+          testedSettingsSignature = LT.OptionsUI.providerSignature(snapshot, provider.id);
+          if (!await access.authorize()) {
+            if (current()) state.textContent = '未获得域名权限，未发送请求。请在接口地址下方授权后重试。';
+            return;
+          }
+          if (!current()) return;
+          if (kind === 'list') {
+            const ids = await LT.TextModel.listModels(testedConfig, controller.signal);
+            if (!current()) return;
+            fillList(ids);
+            if (!ids.length) listState.textContent = '接口没有返回模型列表，可直接手填模型 ID，再用「生成测试」验证。';
+            picker.show();
+            model.focus();
+          } else if (kind === 'probe') {
+            const result = await LT.TextModel.probe(testedConfig, controller.signal);
+            if (!current()) return;
+            testState.textContent = (result.ok ? '✓ ' : '✗ ') + result.message + (result.ms ? ' · ' + result.ms + ' ms' : '') + viaNote(result.via);
+            if (Array.isArray(result.models)) fillList(result.models);
+          } else {
+            const result = await LT.TextModel.generateTest(testedConfig, controller.signal);
+            if (!current()) return;
+            ctx.onTest?.({ providerId: provider.id, signature: JSON.stringify(testedConfig), settingsSignature: testedSettingsSignature, ok: true });
+            testState.textContent = '✓ 生成测试通过 · ' + result.ms + ' ms' + viaNote(result.via) + ' · 回复「' + result.sample + '」';
+          }
         } catch (err) {
-          if (testedConfig) ctx.onTest?.({ providerId: provider.id, signature: JSON.stringify(testedConfig), settingsSignature: testedSettingsSignature, ok: false });
-          testState.textContent = `✗ 生成测试失败：${describeError(err)}`;
+          if (!current() || err.name === 'AbortError') return;
+          if (kind === 'generate' && testedConfig) ctx.onTest?.({ providerId: provider.id, signature: JSON.stringify(testedConfig), settingsSignature: testedSettingsSignature, ok: false });
+          state.textContent = (kind === 'list' ? '获取失败：' : kind === 'generate' ? '✗ 生成测试失败：' : '✗ ') + describeError(err);
+          if (kind === 'list') state.textContent += '；仍可手填模型 ID。';
         } finally {
-          busy(false);
+          if (current()) { pending = null; busy(false); }
         }
-      });
-      listBtn.addEventListener('click', async () => {
-        busy(true);
-        listState.textContent = '读取中…';
-        try {
-          if (!await access.authorize()) { listState.textContent = '未获得域名权限，请先授权。'; return; }
-          const ids = await LT.TextModel.listModels(config());
-          if (ids.length) fillList(ids);
-          else listState.textContent = '接口没有返回模型列表';
-        } catch (err) {
-          listState.textContent = `列出失败：${describeError(err)}`;
-        } finally {
-          busy(false);
-        }
-      });
+      }
+      test.addEventListener('click', () => runRequest('probe'));
+      gen.addEventListener('click', () => runRequest('generate'));
+      listBtn.addEventListener('click', () => runRequest('list'));
 
       return root;
     }

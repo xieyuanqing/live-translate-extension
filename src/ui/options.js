@@ -175,7 +175,7 @@
     if (page === 'data') renderCache();
     if (page === 'about') dataUI.refreshLogs();
     if (page === 'models') {
-      if (!['text', 'live', 'speech'].includes(serviceTab)) serviceTab = 'text';
+      if (!['text', 'live', 'chat', 'speech'].includes(serviceTab)) serviceTab = 'text';
       for (const panel of document.querySelectorAll('[data-service-panel]')) panel.hidden = panel.dataset.servicePanel !== serviceTab;
       for (const tab of document.querySelectorAll('[data-service-tab]')) {
         if (tab.dataset.serviceTab === serviceTab) tab.setAttribute('aria-current', 'true');
@@ -213,7 +213,8 @@
         const actual = JSON.parse(signature), current = LT.TextModel.resolve(snapshot, providerId);
         const provider = snapshot.providers.find(p => p.id === providerId);
         if (!provider) return;
-        const keys = provider.apiKey ? [provider.apiKey] : LT.Settings.keyList(snapshot);
+        const keys = provider.apiKey ? [provider.apiKey] : provider.apiType === 'gemini' ? LT.Settings.keyList(snapshot) : [''];
+        if (!keys.length) keys.push('');
         const actualKey = actual.key;
         delete actual.key; delete current.key;
         if (!keys.includes(actualKey) || JSON.stringify(actual) !== JSON.stringify(current)) return;
@@ -553,8 +554,15 @@
       });
     }
 
+    for (const preset of LT.TEXT_PRESETS) {
+      const option = document.createElement('option');
+      option.value = preset.code;
+      option.textContent = preset.label;
+      $('providerPreset').appendChild(option);
+    }
     $('addProvider').addEventListener('click', () => {
-      const provider = LT.Settings.newProvider({});
+      const preset = LT.TEXT_PRESETS.find(item => item.code === $('providerPreset').value);
+      const provider = LT.Settings.newProvider({ name: preset.code === 'custom' ? '' : preset.label, apiType: preset.apiType, baseUrl: preset.baseUrl });
       settings.providers.push(provider);
       queueSave({});
       providers.render(provider.id);

@@ -57,6 +57,7 @@ function harness({ unitCount = 100, storage = memoryStorage(), translate } = {})
     constructor(message, opts = {}) { super(message); this.name = 'RequestError'; Object.assign(this, opts); }
   }
   LT.TextModel = {
+    hasCredentials: config => !!config.key,
     RequestError,
     resolve: s => ({ apiType: 'gemini', baseUrl: '', key: s.apiKeys, model: s.textModel, concurrency: s.textConcurrency, path: 'auto' }),
     translate: async ({ user, signal }) => { calls.push(user); return h.translate(user, signal, calls.length); },

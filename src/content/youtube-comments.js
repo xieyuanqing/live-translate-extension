@@ -185,7 +185,7 @@
         controllers.add(controller);
         try {
           const config = LT.TextModel.resolve(snapshot, snapshot.commentProviderId);
-          if (!config.key || !config.model) throw new Error('请在「聊天与评论」选择接口，并在「接口」配置 Key 和模型名');
+          if (!LT.TextModel.hasCredentials(config) || !config.model) throw new Error('请在「聊天与评论」选择接口，并在「接口」配置鉴权和模型名');
           const meta = snapshot.useMetadata ? await LT.YouTube.requestMeta() : null;
           if (!isCurrent(run) || controller.signal.aborted) return;
           const review = LT.LiveContext.currentReview?.();

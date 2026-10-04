@@ -113,7 +113,8 @@ function tasks({ settingsGate, synthesize, playerGate, failInjection, customSett
   const defaults = ctx.LT.Settings.normalize(customSettings || {});
   ctx.LT.Settings.load = async () => settingsGate ? settingsGate.promise : defaults;
   ctx.LT.MicrosoftTTS.synthesize = synthesize || (async () => ({bytes:Uint8Array.from([1,2,3]),mime:'audio/mpeg'}));
-  ctx.LT.TextModel = {resolve:translateResolve || (()=>({key:'test',model:'test',baseUrl:'https://example.com'})),translate:async()=>({text:'译文'})};
+  load(ctx, 'src/subs/text-model.js');
+  ctx.LT.TextModel = {...ctx.LT.TextModel,resolve:translateResolve || (()=>({key:'test',model:'test',baseUrl:'https://example.com'})),translate:async()=>({text:'译文'})};
   load(ctx, 'src/background/selection.js');
   function port(frameId = 0) {
     const received = [], disconnect = [];
@@ -143,6 +144,20 @@ test('后台按浮窗指定的配置发送翻译，不把无效 id 悄悄退到�
   assert.equal(selected.length, 1);
   assert.match(port.replies.at(-1).error, /已删除/);
 });
+test('划词翻译允许只用请求头鉴权，服务错误中的请求头凭据会脱敏', async () => {
+  const headers = { 'x-api-key': 'private-header-token' };
+  const h = tasks({ customSettings: { providers: [{ id: 'p', apiType: 'openai', model: 'm', headers }] },
+    translateResolve: () => ({ key: '', model: 'm', headers, baseUrl: 'https://example.com' }) });
+  const port = h.port();
+  port.receive({ type: 'translate', text: '東京', requestId: 1 });
+  await waitFor(() => port.replies.some(item => item.requestId === 1), '请求头鉴权应收到译文');
+  assert.equal(port.replies.at(-1).text, '译文');
+  h.ctx.LT.TextModel.translate = async () => { throw new Error('server echoed private-header-token'); };
+  port.receive({ type: 'translate', text: '東京', requestId: 2 });
+  await waitFor(() => port.replies.some(item => item.requestId === 2), '应收到脱敏错误');
+  assert.equal(port.replies.at(-1).error.includes('private-header-token'), false);
+});
+
 test('划词切换目标语言时按请求冻结语言，无效语言不会进入模型', async () => {
   const h = tasks();
   const prompts = [];

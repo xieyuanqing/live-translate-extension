@@ -73,6 +73,35 @@ button { padding: 8px 12px; }
 .provider-picker { display: none; margin-bottom: 16px; }
 .provider-picker .label { margin-bottom: 6px; color: var(--secondary-fg); font-size: 13px; }
 .provider-workspace .providers { min-width: 0; margin-bottom: 0; }
+.provider-create { display: flex; gap: 8px; min-width: 0; }
+.provider-create select { width: 185px; min-width: 0; }
+.preset-note { margin: -5px 0 18px; }
+.model-picker { position: relative; flex: 1 1 160px; min-width: 0; }
+.model-input-row { display: flex; border: 1px solid var(--input-line); border-radius: 8px; background: var(--card); }
+.model-input-row:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.model-input-row input[type='text'] { flex: 1; width: 0; min-width: 0; border: 0; box-shadow: none; outline: none; background: transparent; }
+.model-toggle { flex: 0 0 36px; border: 0; background: transparent; padding: 4px; color: var(--muted); font-size: 16px; }
+.model-options { position: absolute; top: calc(100% + 7px); left: 0; right: 0; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; z-index: 5; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); box-shadow: 0 8px 24px #0002; }
+.model-option { padding: 8px 10px; border-radius: 5px; cursor: pointer; overflow-wrap: anywhere; line-height: 1.4; }
+.model-options[data-side='above'] { top: auto; bottom: calc(100% + 7px); }
+.model-option[aria-selected='true'] { color: var(--accent); background: var(--accent-soft); }
+.model-option:hover, .model-option[data-active='true'] { background: var(--hover); }
+.model-empty { margin: 0; padding: 10px; color: var(--muted); font-size: 12px; }
+.custom-headers { border-top: 1px solid var(--divider); margin-top: 18px; padding-top: 14px; }
+.custom-headers summary { cursor: pointer; color: var(--secondary-fg); }
+.custom-headers > p { margin: 10px 0; }
+.header-rows { display: grid; gap: 8px; margin: 12px 0; }
+.header-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 7px; }
+.header-row input { min-width: 0; }
+.service-pending { color: var(--muted); }
+.service-pending summary { cursor: pointer; }
+.service-pending p { font-size: 12px; margin-top: 10px; }
+@media (max-width: 640px) {
+  .service-heading:has(.provider-create) { align-items: stretch; flex-direction: column; gap: 10px; }
+  .provider-create select { flex: 1; width: 0; }
+  .header-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .header-row input:first-child { grid-column: 1 / -1; }
+}
 /* 授权采用一行状态与操作，解释可折叠，不再嵌套第三层卡片。 */
 .host-access { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--divider); overflow-wrap: anywhere; }
 .host-access-row { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 10px; }

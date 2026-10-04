@@ -222,6 +222,20 @@ globalThis.LT = globalThis.LT || {};
     { code: 'openai', label: 'OpenAI 兼容 chat/completions' },
     { code: 'gemini', label: 'Gemini generateContent' },
   ];
+  // 预设仅填写协议和基础地址，模型由用户手填或从接口获取，不绑定厂商模型清单。
+  LT.TEXT_PRESETS = [
+    { code: 'custom', label: '自定义接口', apiType: 'openai', baseUrl: '' },
+    { code: 'gemini', label: 'Gemini', apiType: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' },
+    { code: 'openai', label: 'OpenAI', apiType: 'openai', baseUrl: 'https://api.openai.com/v1' },
+    { code: 'deepseek', label: 'DeepSeek', apiType: 'openai', baseUrl: 'https://api.deepseek.com' },
+    { code: 'siliconflow', label: '硅基流动', apiType: 'openai', baseUrl: 'https://api.siliconflow.cn/v1' },
+    { code: 'ark', label: '火山方舟（北京）', apiType: 'openai', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3' },
+    { code: 'bailian', label: '阿里百炼（北京）', apiType: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+    { code: 'bailian-intl', label: '阿里百炼（新加坡）', apiType: 'openai', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' },
+    { code: 'openrouter', label: 'OpenRouter', apiType: 'openai', baseUrl: 'https://openrouter.ai/api/v1' },
+    { code: 'groq', label: 'Groq', apiType: 'openai', baseUrl: 'https://api.groq.com/openai/v1' },
+    { code: 'moonshot', label: '月之暗面', apiType: 'openai', baseUrl: 'https://api.moonshot.cn/v1' },
+  ];
   LT.TEXT_DEFAULT_BASE = {
     gemini: 'https://generativelanguage.googleapis.com',
     openai: 'https://api.openai.com/v1',

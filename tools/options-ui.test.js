@@ -10,14 +10,19 @@ const flush = async () => { for (let i = 0; i < 10; i++) await new Promise(r => 
 class FakeNode {
   constructor(tag) {
     this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {};
-    this.className = ''; this.value = ''; this.textContent = ''; this.disabled = false; this.placeholder = '';
+    this.className = ''; this.value = ''; this.textContent = ''; this.disabled = false; this.placeholder = ''; this.style = {};
   }
   appendChild(c) { this.children.push(c); return c; }
   append(...cs) { cs.forEach(c => this.appendChild(c)); }
   replaceChildren(...cs) { this.children = []; cs.forEach(c => this.appendChild(c)); }
   setAttribute(k, v) { this.attrs[k] = v; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  focus() { this.focused = true; }
+  scrollIntoView() {}
+  getBoundingClientRect() { return { top: 100, bottom: 140 }; }
+  contains(node) { return node === this || this.children.some(child => child.contains(node)); }
   addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
-  fire(type) { for (const fn of this.listeners[type] || []) fn({ target: this }); }
+  fire(type, extra = {}) { for (const fn of this.listeners[type] || []) fn({ target: this, preventDefault() {}, ...extra }); }
   all(pred, out = []) { for (const c of this.children) { if (pred(c)) out.push(c); c.all(pred, out); } return out; }
   byText(text) { return this.all(n => n.textContent === text)[0]; }
   byClass(cls) { return this.all(n => n.className.split(' ').includes(cls)); }
@@ -25,8 +30,9 @@ class FakeNode {
 
 function harness({ probe, generateTest, listModels, contains, request } = {}) {
   const ctx = vm.createContext({
-    console, URL, Date, Math, JSON, setTimeout, clearTimeout, confirm: () => true,
+    console, URL, Date, Math, JSON, AbortController, setTimeout, clearTimeout, confirm: () => true,
     document: { createElement: tag => new FakeNode(tag) },
+    window: { innerHeight: 1000 },
     chrome: { permissions: { contains: contains || (async () => false), request: request || (async () => true) } },
   });
   for (const f of ['src/common/constants.js', 'src/common/settings.js', 'src/common/selection.js', 'src/subs/text-model.js',
@@ -81,7 +87,7 @@ test('配置列表只展开正在编辑的一套，保留用途标记；只剩�
 test('编辑模型原位保存；切换编辑的接口不会改变各功能选用', () => {
   const h = harness();
   h.edit('o');
-  const model = h.cards()[0].all(n => n.tag === 'input' && n.attrs.list === 'models-o')[0];
+  const model = h.cards()[0].all(n => n.tag === 'input' && n.attrs['aria-controls'] === 'models-o')[0];
   model.value = 'local-2';
   model.fire('input');
   assert.equal(h.settings.providers[1].model, 'local-2');
@@ -132,12 +138,12 @@ test('生成测试的失败会带上原因；列出模型填进候选并计数',
   assert.match(h.cards()[0].byClass('test-state')[0].textContent, /^✗ 生成测试失败：模型名不存在/);
   assert.equal(h.testResults.length, 1);
   assert.equal(h.testResults[0].ok, false);
-  h.cards()[0].byText('列出可用模型').fire('click');
+  h.cards()[0].byText('获取模型').fire('click');
   await flush();
-  const datalist = h.cards()[0].all(n => n.tag === 'datalist')[0];
-  assert.equal(datalist.children.length, 3);
-  assert.equal(datalist.children[0].value, 'gemini-x');
-  assert.match(h.cards()[0].all(n => n.textContent.startsWith('共 3 个可用模型'))[0].textContent, /共 3 个/);
+  const list = h.cards()[0].byClass('model-options')[0];
+  assert.equal(list.children.length, 3);
+  assert.equal(list.children[0].textContent, 'gemini-x');
+  assert.match(h.cards()[0].byClass('model-list-state')[0].textContent, /已获取 3 个模型/);
 });
 
 test('跨域直连失败时给出授权与改走后台的提示', async () => {
@@ -146,6 +152,49 @@ test('跨域直连失败时给出授权与改走后台的提示', async () => {
   h.cards()[0].byText('查询接口').fire('click');
   await flush();
   assert.match(h.cards()[0].byClass('test-state')[0].textContent, /不允许浏览器直连/);
+});
+
+test('模型箭头显示全部，输入筛选、键盘选择和手填未知模型都能保存', async () => {
+  const h = harness({ listModels: async () => ['gem', 'second-model', 'third-model'] });
+  const card = h.cards()[0], input = card.all(n => n.tag === 'input' && n.attrs.role === 'combobox')[0];
+  card.byText('获取模型').fire('click'); await flush();
+  const list = card.byClass('model-options')[0];
+  assert.equal(list.children.length, 3);
+  input.value = 'second'; input.fire('input');
+  assert.equal(list.children.length, 1);
+  input.fire('keydown', { key: 'ArrowDown' }); input.fire('keydown', { key: 'Enter' });
+  assert.equal(h.settings.providers[0].model, 'second-model');
+  assert.equal(list.hidden, true);
+  card.byClass('model-toggle')[0].fire('click');
+  assert.equal(list.children.length, 3);
+  input.value = 'manual-model-not-listed'; input.fire('input'); input.fire('keydown', { key: 'Escape' });
+  assert.equal(h.settings.providers[0].model, 'manual-model-not-listed');
+  assert.equal(list.hidden, true);
+});
+
+test('修改请求头会清除旧模型列表，迟到的模型响应不会填入新配置', async () => {
+  let complete;
+  const h = harness({ contains: async () => true, listModels: () => new Promise(resolve => { complete = resolve; }) });
+  const card = h.cards()[0];
+  card.byText('获取模型').fire('click'); await flush();
+  card.byText('添加请求头').fire('click');
+  const inputs = card.byClass('header-row')[0].children;
+  inputs[0].value = 'X-Api-Key'; inputs[0].fire('input');
+  inputs[1].value = 'header-test-only'; inputs[1].fire('input');
+  complete(['old-account-model']); await flush();
+  assert.equal(h.settings.providers[0].headers['x-api-key'], 'header-test-only');
+  assert.equal(card.byClass('model-option').length, 0);
+  assert.match(card.byClass('model-list-state')[0].textContent, /连接配置已修改/);
+});
+
+test('切换编辑的接口会作废未完成的模型列表请求', async () => {
+  let complete;
+  const h = harness({ contains: async () => true, listModels: () => new Promise(resolve => { complete = resolve; }) });
+  const previous = h.cards()[0];
+  previous.byText('获取模型').fire('click'); await flush();
+  h.edit('o'); complete(['other-account-model']); await flush();
+  assert.equal(h.cards()[0].byClass('model-option').length, 0);
+  assert.equal(previous.byClass('model-option').length, 0);
 });
 
 test('授权在地址下方；拒绝授权时不发模型或生成请求，端口不进入主机权限模式', async () => {
@@ -266,7 +315,7 @@ test('权限检查与授权失败有状态和详情，仍可通过按钮重试',
   assert.equal(button.disabled, false);
 });
 
-test('仅生成测试上报可用结果，迟到成功保留实际发送配置的签名', async () => {
+test('修改模型后作废尚未完成的生成测试，迟到成功不再上报', async () => {
   let complete;
   const h = harness({ contains: async () => true,
     generateTest: () => new Promise(resolve => { complete = resolve; }) });
@@ -276,14 +325,11 @@ test('仅生成测试上报可用结果，迟到成功保留实际发送配置�
   assert.equal(h.testResults.length, 0);
   h.cards()[0].byText('生成测试').fire('click');
   await flush();
-  const model = h.cards()[0].all(node => node.tag === 'input' && node.attrs.list === 'models-g')[0];
+  const model = h.cards()[0].all(node => node.tag === 'input' && node.attrs['aria-controls'] === 'models-g')[0];
   model.value = 'new-model'; model.fire('input');
   complete({ ms: 5, via: 'direct', sample: '你好' });
   await flush();
-  assert.equal(h.testResults.length, 1);
-  assert.equal(h.testResults[0].ok, true);
-  assert.equal(h.testResults[0].providerId, 'g');
-  assert.equal(JSON.parse(h.testResults[0].signature).model, 'gem');
+  assert.equal(h.testResults.length, 0);
   assert.equal(h.settings.providers[0].model, 'new-model');
 });
 

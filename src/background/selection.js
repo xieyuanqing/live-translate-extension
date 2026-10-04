@@ -91,7 +91,7 @@
       const targetLang = message.targetLang || settings.targetLang;
       if (!LT.TARGET_LANGS.some(lang => lang.code === targetLang)) throw new Error('目标语言无效，请重新选择');
       const config = LT.TextModel.resolve(settings, selected);
-      if (!config.key || !config.model) throw new Error('请先在「接口 → 文字翻译」填写所选接口的 Key 和模型名');
+      if (!LT.TextModel.hasCredentials(config) || !config.model) throw new Error('请先在「接口 → 文字翻译」填写所选接口的 Key 或鉴权请求头，以及模型名');
       if (!await chrome.permissions.contains({ origins: [LT.Settings.hostPattern(config.baseUrl)] })) throw new Error('请先在「接口 → 文字翻译」授权域名');
       config.path = 'direct';
       const out = await LT.TextModel.translate({ config, signal: controller.signal,

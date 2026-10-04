@@ -26,7 +26,7 @@ test('主播名即使被模型遗漏也保留，术语总数不超过 12，不�
 test('公开预览的整理输入与文字模型实际收到的 system/user 相同', async () => {
   const LT = harness(); let received;
   LT.Net = {};
-  LT.TextModel = { resolve: () => ({ key: 'placeholder', model: 'test' }),
+  LT.TextModel = { hasCredentials: config => !!config.key, resolve: () => ({ key: 'placeholder', model: 'test' }),
     translate: async value => { received = value; return { text: '{"background":"生日直播","terms":[{"source":"ゆに","target":"YuNi"}]}' }; } };
   const settings = { generateLiveContext: true, sourceLang: 'ja', targetLang: 'zh' };
   const expected = LT.LiveContext.buildRequest(settings, '频道：YuNi', '保留主播名');
