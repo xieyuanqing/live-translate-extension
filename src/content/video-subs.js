@@ -317,114 +317,15 @@ globalThis.LT = globalThis.LT || {};
 
       try {
         const config = LT.TextModel.resolve(settings);
-        const requireModel = () => {
-          if (!config.key) throw new Error('未配置 API Key，请在扩展设置里填写');
-          if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
-        };
-
         const source = await this.loadSource(videoId, settings, alive);
         if (!source || !alive()) return;
-        let { cachedMeta } = source;
-        const { units, trackKey, trackLabel, isAsr, sourceHash } = source;
+        const { units, trackLabel } = source;
 
         const prompt = this.buildPromptAndFingerprint({ settings, meta, tempContext, config }, source);
-        const { scene, system, fp } = prompt;
 
-        // ---- 3. 分块，接上已有译文 ----
-        const chunks = LT.Chunker.plan(units, {
-          chunkUnits: LT.SUBS.CHUNK_UNITS,
-          chunkChars: LT.SUBS.CHUNK_CHARS,
-        });
-        let cachedChunks = [];
-        if (cachedMeta && cachedMeta.fp && cachedMeta.fp !== fp) {
-          if (!force && cachedMeta.trackKey === trackKey) {
-            // 旧设置缓存继续显示，部分缓存也不能混入新配置的译文。
-            const loaded = await this.loadCached(cachedMeta, gen);
-            if (!alive()) return;
-            if (loaded) {
-              this.staleConfig = true;
-              this.hasCache = true;
-              this.config = config;
-              this.note('流译：已加载旧设置翻译的缓存字幕', 'ok', true);
-              this.emit();
-              return;
-            }
-          }
-          requireModel();
-          await LT.SubsCache.removeChunks(videoId);
-          if (!alive()) return;
-          cachedMeta = null;
-        } else if (cachedMeta && cachedMeta.fp === fp) {
-          if (force) {
-            requireModel();
-            await LT.SubsCache.removeChunks(videoId);
-          } else {
-            cachedChunks = await LT.SubsCache.getChunks(videoId, fp, chunks.length);
-          }
-          if (!alive()) return;
-        }
-
-        const texts = new Array(units.length);
-        const states = chunks.map(() => 'pending');
-        cachedChunks.forEach((arr, i) => {
-          if (chunks[i] && validTexts(arr, chunks[i].to - chunks[i].from + 1)) {
-            arr.forEach((t, k) => {
-              texts[chunks[i].from + k] = t;
-            });
-            states[i] = 'done';
-          }
-        });
-        if (!states.every(s => s === 'done')) requireModel();
-        Object.assign(this, {
-          units,
-          texts,
-          chunks,
-          states,
-          fp,
-          trackKey,
-          trackLabel,
-          isAsr,
-          config,
-          system,
-          staleConfig: false,
-          fromCache: states.some((s) => s === 'done'),
-          hasCache: true,
-          lastIdx: -2,
-        });
-        const record = {
-          videoId,
-          title: (meta && meta.title) || (cachedMeta && cachedMeta.title) || '',
-          trackKey,
-          trackLabel,
-          sourceLang: settings.sourceLang,
-          sourceHash,
-          segVersion: LT.SUBS.SEG_VERSION,
-          settingsHash: settingsHash(settings),
-          targetLang: settings.targetLang,
-          fp,
-          apiType: config.apiType,
-          model: config.model,
-          sceneLabel: scene.label,
-          unitCount: units.length,
-          chunks: chunks.map((c) => [c.from, c.to]),
-          complete: states.every((s) => s === 'done'),
-          createdAt: (cachedMeta && cachedMeta.createdAt) || Date.now(),
-          updatedAt: Date.now(),
-        };
-        this.meta = record;
-        this.cachedComplete = record.complete;
-        await LT.SubsCache.setMeta(record).catch((err) => {
-          if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
-        });
-        if (!alive()) return;
-
-        if (record.complete) {
-          this.phase = 'ready';
-          this.fromCache = true;
-          this.note('流译：整片字幕已就绪（缓存）', 'ok', true);
-          this.emit();
-          return;
-        }
+        const restored = await this.restoreChunks({ videoId, settings, meta, force, gen, config }, source, prompt, alive);
+        if (!restored || !alive() || restored.done) return;
+        const { chunks, states } = restored;
 
         // ---- 4. 并发翻译 ----
         console.info(
@@ -510,6 +411,111 @@ globalThis.LT = globalThis.LT || {};
         system,
       });
       return { scene, system, fp };
+    }
+
+    async restoreChunks({ videoId, settings, meta, force, gen, config }, source, { scene, system, fp }, alive) {
+      let { cachedMeta } = source;
+      const { units, trackKey, trackLabel, isAsr, sourceHash } = source;
+      const requireModel = () => {
+        if (!config.key) throw new Error('未配置 API Key，请在扩展设置里填写');
+        if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
+      };
+
+      const chunks = LT.Chunker.plan(units, {
+        chunkUnits: LT.SUBS.CHUNK_UNITS,
+        chunkChars: LT.SUBS.CHUNK_CHARS,
+      });
+      let cachedChunks = [];
+      if (cachedMeta && cachedMeta.fp && cachedMeta.fp !== fp) {
+        if (!force && cachedMeta.trackKey === trackKey) {
+          // 旧设置缓存继续显示，部分缓存也不能混入新配置的译文。
+          const loaded = await this.loadCached(cachedMeta, gen);
+          if (!alive()) return null;
+          if (loaded) {
+            this.staleConfig = true;
+            this.hasCache = true;
+            this.config = config;
+            this.note('流译：已加载旧设置翻译的缓存字幕', 'ok', true);
+            this.emit();
+            return { done: true };
+          }
+        }
+        requireModel();
+        await LT.SubsCache.removeChunks(videoId);
+        if (!alive()) return null;
+        cachedMeta = null;
+      } else if (cachedMeta && cachedMeta.fp === fp) {
+        if (force) {
+          requireModel();
+          await LT.SubsCache.removeChunks(videoId);
+        } else {
+          cachedChunks = await LT.SubsCache.getChunks(videoId, fp, chunks.length);
+        }
+        if (!alive()) return null;
+      }
+
+      const texts = new Array(units.length);
+      const states = chunks.map(() => 'pending');
+      cachedChunks.forEach((arr, i) => {
+        if (chunks[i] && validTexts(arr, chunks[i].to - chunks[i].from + 1)) {
+          arr.forEach((t, k) => {
+            texts[chunks[i].from + k] = t;
+          });
+          states[i] = 'done';
+        }
+      });
+      if (!states.every(s => s === 'done')) requireModel();
+      Object.assign(this, {
+        units,
+        texts,
+        chunks,
+        states,
+        fp,
+        trackKey,
+        trackLabel,
+        isAsr,
+        config,
+        system,
+        staleConfig: false,
+        fromCache: states.some((s) => s === 'done'),
+        hasCache: true,
+        lastIdx: -2,
+      });
+      const record = {
+        videoId,
+        title: (meta && meta.title) || (cachedMeta && cachedMeta.title) || '',
+        trackKey,
+        trackLabel,
+        sourceLang: settings.sourceLang,
+        sourceHash,
+        segVersion: LT.SUBS.SEG_VERSION,
+        settingsHash: settingsHash(settings),
+        targetLang: settings.targetLang,
+        fp,
+        apiType: config.apiType,
+        model: config.model,
+        sceneLabel: scene.label,
+        unitCount: units.length,
+        chunks: chunks.map((c) => [c.from, c.to]),
+        complete: states.every((s) => s === 'done'),
+        createdAt: (cachedMeta && cachedMeta.createdAt) || Date.now(),
+        updatedAt: Date.now(),
+      };
+      this.meta = record;
+      this.cachedComplete = record.complete;
+      await LT.SubsCache.setMeta(record).catch((err) => {
+        if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
+      });
+      if (!alive()) return null;
+
+      if (record.complete) {
+        this.phase = 'ready';
+        this.fromCache = true;
+        this.note('流译：整片字幕已就绪（缓存）', 'ok', true);
+        this.emit();
+        return { done: true };
+      }
+      return { done: false, chunks, states };
     }
 
     /** 从 YouTube 读取字幕轨并分句；失败抛错，任务被作废时返回 null。 */
