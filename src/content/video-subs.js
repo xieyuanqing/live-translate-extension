@@ -316,32 +316,16 @@ globalThis.LT = globalThis.LT || {};
       this.emit();
 
       try {
-        const config = LT.TextModel.resolve(settings);
+        const run = { videoId, settings, meta, tempContext, force, gen, config: LT.TextModel.resolve(settings) };
         const source = await this.loadSource(videoId, settings, alive);
         if (!source || !alive()) return;
-        const { units, trackLabel } = source;
 
-        const prompt = this.buildPromptAndFingerprint({ settings, meta, tempContext, config }, source);
+        const prompt = this.buildPromptAndFingerprint(run, source);
 
-        const restored = await this.restoreChunks({ videoId, settings, meta, force, gen, config }, source, prompt, alive);
+        const restored = await this.restoreChunks(run, source, prompt, alive);
         if (!restored || !alive() || restored.done) return;
-        const { chunks, states } = restored;
 
-        // ---- 4. 并发翻译 ----
-        console.info(
-          `[流译] 整片翻译开始｜${trackLabel}｜${units.length} 条 / ${chunks.length} 块｜已缓存 ${
-            states.filter((s) => s === 'done').length
-          } 块｜模型 ${config.apiType}:${config.model}`
-        );
-        this.phase = 'translating';
-        this.lastNoteAt = 0;
-        this.emit();
-        const n = Math.max(1, Math.min(6, Number(config.concurrency) || 3));
-        const workers = [];
-        for (let i = 0; i < n; i++) workers.push(this.worker(gen, alive));
-        await Promise.all(workers);
-        if (!alive()) return;
-        await this.finish(alive);
+        await this.translateAll(gen, alive);
       } catch (err) {
         if (!alive() || isAbort(err)) return;
         console.error('[流译] 整片字幕失败', err);
@@ -515,7 +499,25 @@ globalThis.LT = globalThis.LT || {};
         this.emit();
         return { done: true };
       }
-      return { done: false, chunks, states };
+      return { done: false };
+    }
+
+    async translateAll(gen, alive) {
+      const { trackLabel, units, chunks, states, config } = this;
+      console.info(
+        `[流译] 整片翻译开始｜${trackLabel}｜${units.length} 条 / ${chunks.length} 块｜已缓存 ${
+          states.filter((s) => s === 'done').length
+        } 块｜模型 ${config.apiType}:${config.model}`
+      );
+      this.phase = 'translating';
+      this.lastNoteAt = 0;
+      this.emit();
+      const n = Math.max(1, Math.min(6, Number(config.concurrency) || 3));
+      const workers = [];
+      for (let i = 0; i < n; i++) workers.push(this.worker(gen, alive));
+      await Promise.all(workers);
+      if (!alive()) return;
+      await this.finish(alive);
     }
 
     /** 从 YouTube 读取字幕轨并分句；失败抛错，任务被作废时返回 null。 */
