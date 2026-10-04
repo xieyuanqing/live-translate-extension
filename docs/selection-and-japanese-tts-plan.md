@@ -109,9 +109,9 @@ Read Frog 的可选列表主动过滤 DragonHD：消费者 token 返回的区域
 - 日语候选及 HD 过滤：[音色配置](https://github.com/mengxi-ream/read-frog/blob/308a08d73091300c14fe2bf184d59895478174ef/src/types/config/tts.ts#L2014)、[过滤规则](https://github.com/mengxi-ream/read-frog/blob/308a08d73091300c14fe2bf184d59895478174ef/src/types/config/tts.ts#L3175)。
 - MV3 播放参考：[offscreen 调度](https://github.com/mengxi-ream/read-frog/blob/308a08d73091300c14fe2bf184d59895478174ef/src/entrypoints/background/tts-playback.ts#L11)、[Audio 清理](https://github.com/mengxi-ream/read-frog/blob/308a08d73091300c14fe2bf184d59895478174ef/src/utils/tts-playback/dom-audio-controller.ts#L38)。
 - 两份下载源码均含 GPLv3：[KISS LICENSE](https://github.com/fishjar/kiss-translator/blob/7de86b4efcadf4245bbab0d9bcfb0c594b5ab2cd/LICENSE)、[Read Frog LICENSE](https://github.com/mengxi-ream/read-frog/blob/308a08d73091300c14fe2bf184d59895478174ef/LICENSE)。
-- 开发阶段先按本机自用实现；当前用户已要求上传源码。保留版权、来源、版本、完整适配源码与许可证文件，并明确组合包不能笼统标为 MIT。
+- 源码已公开；须保留版权、来源、版本、完整适配源码与许可证文件，并明确组合包不能笼统标为 MIT。
 - 0.4.0 已将微软签名／endpoint 协议适配进 `src/tts/microsoft.js`，随运行包保留 `src/tts/LICENSE.read-frog`；来源、版本和改动见 [第三方来源记录](third-party-tts.md)。GPL 允许私人修改和使用，不要求因此公开修改版；见 [GNU 官方 FAQ](https://www.gnu.org/licenses/gpl-faq.en.html#GPLRequireSourcePostedPublic)。
-- 本次 GitHub 同步保留 GPLv3 适配部分及其许可证；向别人分发组合安装包时仍需遵守适用许可要求。复制的 GPL 部分不会因仓库现有 MIT 标签自动变为 MIT。
+- 源码包含 GPLv3 适配部分及其许可证；向别人分发组合安装包时仍需遵守适用许可要求。复制的 GPL 部分不会因仓库现有 MIT 标签自动变为 MIT。
 
 ## 官方资料与验收
 

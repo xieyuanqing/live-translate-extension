@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — maintenance (2026-10-05)
+
+- Preserve a metadata description limit of zero instead of replacing it with the default of 1,200 characters.
+- Consolidate purpose-specific provider normalization and use a no-op live logger when diagnostics are disabled.
+- Remove redundant exception handling around socket closure, cancellation and fixed DOM operations; report subtitle status callback failures while preserving external-data and session-race handling.
+- Split live and whole-video startup into named stages, keeping frozen inputs, generation checks, cache reuse and playback-position priority.
+- Keep development notes focused on structure and invariants, and clarify third-party provenance wording without changing license obligations. Existing features and storage field names remain unchanged.
+
 ## 0.4.4 — unreleased (2026-10-04)
 
 - Reorganize the nine Settings pages into Start, Features, and Appearance & Data. Keep existing routes and credentials, rename the API section to 接口, and use one interface dropdown on each feature page. Interface editing contains addresses, keys, models, browser permission and tests.
