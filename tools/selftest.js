@@ -257,6 +257,8 @@ console.log('\n[3] 提示词组合');
 console.log('\n[4] 设置归一化');
 {
   const s = LT.Settings.normalize({ rotateSeconds: 9999, stabMaxChars: 1, sceneId: '不存在' });
+  check('简介截断长度保留合法的 0', LT.Settings.normalize({ metadataLimit: 0 }).metadataLimit === 0);
+  check('简介截断长度缺省仍为 1200', LT.Settings.normalize({}).metadataLimit === 1200);
   check('轮换秒数收敛到上限', s.rotateSeconds === 580, String(s.rotateSeconds));
   check('断句字数收敛到下限', s.stabMaxChars === 20, String(s.stabMaxChars));
   check('无效场景回落到第一个', s.sceneId === s.scenes[0].id, s.sceneId);

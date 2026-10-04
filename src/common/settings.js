@@ -9,6 +9,8 @@ globalThis.LT = globalThis.LT || {};
   const RETIRED = ['textApiType', 'textBaseUrl', 'textApiKey', 'textModel', 'textConcurrency', 'textRequestPath', 'showSource'];
 
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  // 0 是合法值时不能写 `|| 默认值`
+  const numOr = (v, dflt) => (v === '' || v == null || !Number.isFinite(Number(v)) ? dflt : Number(v));
   const color = (v, fallback) => (/^#[0-9a-f]{6}$/i.test(String(v || '')) ? String(v).toLowerCase() : fallback);
   const newProviderId = () => `p-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -62,7 +64,7 @@ globalThis.LT = globalThis.LT || {};
     s.rotateSeconds = clamp(Number(s.rotateSeconds) || 505, 120, 580);
     s.stabIdleMs = clamp(Number(s.stabIdleMs) || 2500, 1000, 6000);
     s.stabMaxChars = clamp(Number(s.stabMaxChars) || 42, 20, 80);
-    s.metadataLimit = clamp(Number(s.metadataLimit) || 1200, 0, 6000);
+    s.metadataLimit = clamp(numOr(s.metadataLimit, 1200), 0, 6000);
     s.captionLines = clamp(Number(s.captionLines) || 2, 1, 5);
     s.captionScale = clamp(Number(s.captionScale) || 1, 0.6, 2.5);
     s.captionBottom = clamp(Number(s.captionBottom) || 11, 2, 60);
