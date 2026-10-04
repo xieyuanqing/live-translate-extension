@@ -363,6 +363,48 @@ globalThis.LT = globalThis.LT || {};
     });
   }
 
+  function buildClient({ runSettings, liveProvider, key, video }, { prompt, generated }, isCurrent) {
+    const Client = liveProvider === 'qwen' ? LT.QwenLiveClient : LT.GeminiLiveClient;
+    return new Client({
+      ...(liveProvider === 'qwen'
+        ? {
+            workspaceHost: runSettings.qwenWorkspaceHost,
+            apiKey: key,
+            phrases: generated ? generated.phrases : {},
+          }
+        : {
+            keyProvider: () => LT.Settings.pickKey(runSettings),
+            baseUrl: runSettings.baseUrl,
+            prompt,
+            echoTargetLanguage: runSettings.echoTargetLanguage,
+            rotateAfterMs: runSettings.rotateSeconds * 1000,
+          }),
+      targetLang: runSettings.targetLang,
+      listener: {
+        onState: (state) => { if (isCurrent()) onConnState(state); },
+        onInputText: (t, info = {}) => {
+          if (isCurrent()) session.debugLog.event('source_text', { text: t, ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
+          // 仅译文模式不记原文；双语和仅原文都要，显示由字幕层按模式过滤
+          if (!isCurrent() || settings.captionDisplayMode === 'translationOnly') return;
+          caption.setSource(t);
+          caption.render();
+        },
+        onOutputText: (t, info = {}) => {
+          if (!isCurrent()) return;
+          session.debugLog.event('translation_fragment', { text: t, ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
+          session.lastOutputAt = Date.now();
+          session.stabilizer.onFragment(t);
+        },
+        onOutputComplete: (info) => {
+          if (!isCurrent()) return;
+          session.debugLog.event('translation_done', { ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
+          session.stabilizer.flush();
+        },
+        onDiagnostic: (type, value) => { if (isCurrent()) session.debugLog.event(type, value); },
+      },
+    });
+  }
+
   async function start(reason) {
     if (session.phase !== 'idle') return;
     videoStartPending = false;
@@ -380,54 +422,13 @@ globalThis.LT = globalThis.LT || {};
     try {
       const run = await resolveRunInputs({ reason, videoId, runTempContext }, isCurrent);
       if (!run || !isCurrent()) return;
-      const { runSettings, liveProvider, key, video } = run;
 
       const frozen = await freezeSnapshot(run, isCurrent);
       if (!frozen || !isCurrent()) return;
-      const { prompt, generated } = frozen;
 
       session.stabilizer = buildStabilizer(run, isCurrent);
 
-      // ---- Live 客户端 ----
-      const Client = liveProvider === 'qwen' ? LT.QwenLiveClient : LT.GeminiLiveClient;
-      session.client = new Client({
-        ...(liveProvider === 'qwen'
-          ? {
-              workspaceHost: runSettings.qwenWorkspaceHost,
-              apiKey: key,
-              phrases: generated ? generated.phrases : {},
-            }
-          : {
-              keyProvider: () => LT.Settings.pickKey(runSettings),
-              baseUrl: runSettings.baseUrl,
-              prompt,
-              echoTargetLanguage: runSettings.echoTargetLanguage,
-              rotateAfterMs: runSettings.rotateSeconds * 1000,
-            }),
-        targetLang: runSettings.targetLang,
-        listener: {
-          onState: (state) => { if (isCurrent()) onConnState(state); },
-          onInputText: (t, info = {}) => {
-            if (isCurrent()) session.debugLog.event('source_text', { text: t, ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
-            // 仅译文模式不记原文；双语和仅原文都要，显示由字幕层按模式过滤
-            if (!isCurrent() || settings.captionDisplayMode === 'translationOnly') return;
-            caption.setSource(t);
-            caption.render();
-          },
-          onOutputText: (t, info = {}) => {
-            if (!isCurrent()) return;
-            session.debugLog.event('translation_fragment', { text: t, ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
-            session.lastOutputAt = Date.now();
-            session.stabilizer.onFragment(t);
-          },
-          onOutputComplete: (info) => {
-            if (!isCurrent()) return;
-            session.debugLog.event('translation_done', { ...info, videoMs: Math.round(video.currentTime * 1000) }, true);
-            session.stabilizer.flush();
-          },
-          onDiagnostic: (type, value) => { if (isCurrent()) session.debugLog.event(type, value); },
-        },
-      });
+      session.client = buildClient(run, frozen, isCurrent);
 
       // ---- 音频旁路 ----
       const tap = new LT.AudioTap({
@@ -442,7 +443,7 @@ globalThis.LT = globalThis.LT || {};
         },
       });
       session.tap = tap;
-      const mode = await tap.attach(video);
+      const mode = await tap.attach(run.video);
       if (!isCurrent()) { tap.detach(); return; }
       session.mode = mode;
       session.debugLog.event('audio_capture', { mode });
