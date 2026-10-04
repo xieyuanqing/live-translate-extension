@@ -7,6 +7,7 @@
 - Remove redundant exception handling around socket closure, cancellation and fixed DOM operations; report subtitle status callback failures while preserving external-data and session-race handling.
 - Split live and whole-video startup into named stages, keeping frozen inputs, generation checks, cache reuse and playback-position priority.
 - Keep development notes focused on structure and invariants, and clarify third-party provenance wording without changing license obligations. Existing features and storage field names remain unchanged.
+- Each refactoring step passes syntax checks, self-tests and all 144 simulated regressions; the zero-limit fix adds two self-test assertions. Packaging and source/archive consistency checks pass. Real Chrome/YouTube/model smoke testing remains pending because browser automation could not reliably identify the active URL and stopped before interaction.
 
 ## 0.4.4 — unreleased (2026-10-04)
 
