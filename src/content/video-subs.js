@@ -327,32 +327,8 @@ globalThis.LT = globalThis.LT || {};
         let { cachedMeta } = source;
         const { units, trackKey, trackLabel, isAsr, sourceHash } = source;
 
-        // ---- 2. 提示词与配置指纹 ----
-        const scene = LT.Settings.scene(settings);
-        const metadataText = settings.useMetadata
-          ? LT.Prompt.formatMetadata(meta, settings.metadataLimit)
-          : '';
-        const system = LT.Prompt.buildSubs({
-          scene,
-          sourceLang: settings.sourceLang,
-          targetLang: settings.targetLang,
-          isAsr,
-          metadataText,
-          manualContext: settings.manualContext,
-          tempContext,
-          extraInstruction: settings.subsExtraInstruction,
-        });
-        const fp = LT.SubsCache.fingerprint({
-          seg: LT.SUBS.SEG_VERSION,
-          chunk: [LT.SUBS.CHUNK_UNITS, LT.SUBS.CHUNK_CHARS],
-          trackKey,
-          sourceHash,
-          targetLang: settings.targetLang,
-          apiType: config.apiType,
-          baseUrl: config.baseUrl,
-          model: config.model,
-          system,
-        });
+        const prompt = this.buildPromptAndFingerprint({ settings, meta, tempContext, config }, source);
+        const { scene, system, fp } = prompt;
 
         // ---- 3. 分块，接上已有译文 ----
         const chunks = LT.Chunker.plan(units, {
@@ -505,6 +481,35 @@ globalThis.LT = globalThis.LT || {};
       const sourceHash = LT.SubsCache.fingerprint(pack(units));
       if (cachedMeta && cachedMeta.sourceHash && cachedMeta.sourceHash !== sourceHash) cachedMeta = null;
       return { cachedMeta, units, trackKey, trackLabel, isAsr, sourceHash };
+    }
+
+    buildPromptAndFingerprint({ settings, meta, tempContext, config }, { isAsr, trackKey, sourceHash }) {
+      const scene = LT.Settings.scene(settings);
+      const metadataText = settings.useMetadata
+        ? LT.Prompt.formatMetadata(meta, settings.metadataLimit)
+        : '';
+      const system = LT.Prompt.buildSubs({
+        scene,
+        sourceLang: settings.sourceLang,
+        targetLang: settings.targetLang,
+        isAsr,
+        metadataText,
+        manualContext: settings.manualContext,
+        tempContext,
+        extraInstruction: settings.subsExtraInstruction,
+      });
+      const fp = LT.SubsCache.fingerprint({
+        seg: LT.SUBS.SEG_VERSION,
+        chunk: [LT.SUBS.CHUNK_UNITS, LT.SUBS.CHUNK_CHARS],
+        trackKey,
+        sourceHash,
+        targetLang: settings.targetLang,
+        apiType: config.apiType,
+        baseUrl: config.baseUrl,
+        model: config.model,
+        system,
+      });
+      return { scene, system, fp };
     }
 
     /** 从 YouTube 读取字幕轨并分句；失败抛错，任务被作废时返回 null。 */
