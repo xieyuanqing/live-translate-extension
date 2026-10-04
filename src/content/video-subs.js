@@ -322,35 +322,10 @@ globalThis.LT = globalThis.LT || {};
           if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
         };
 
-        // ---- 1. 原文：优先缓存里的，没有再读 YouTube ----
-        let cachedMeta = (await LT.SubsCache.getMeta(videoId)) || null;
-        if (!alive()) return;
-        let units = null;
-        let trackKey = '';
-        let trackLabel = '';
-        let isAsr = false;
-        if (cachedMeta && cachedMeta.trackKey) {
-          const src = await LT.SubsCache.getSource(videoId, cachedMeta.trackKey);
-          if (!alive()) return;
-          const fits =
-            validSource(src) &&
-            (settings.sourceLang === 'auto' || langBase(src.lang) === langBase(settings.sourceLang));
-          if (fits) {
-            units = unpack(src.units);
-            trackKey = cachedMeta.trackKey;
-            trackLabel = cachedMeta.trackLabel || '';
-            isAsr = !!src.isAsr;
-          }
-        }
-        if (!units) {
-          // 原文失效后编号可能完全变化，不能走「旧设置缓存」的复用路径。
-          cachedMeta = null;
-          const read = await this.readTrack(videoId, settings, alive);
-          if (!read) return;
-          ({ units, trackKey, trackLabel, isAsr } = read);
-        }
-        const sourceHash = LT.SubsCache.fingerprint(pack(units));
-        if (cachedMeta && cachedMeta.sourceHash && cachedMeta.sourceHash !== sourceHash) cachedMeta = null;
+        const source = await this.loadSource(videoId, settings, alive);
+        if (!source || !alive()) return;
+        let { cachedMeta } = source;
+        const { units, trackKey, trackLabel, isAsr, sourceHash } = source;
 
         // ---- 2. 提示词与配置指纹 ----
         const scene = LT.Settings.scene(settings);
@@ -498,6 +473,38 @@ globalThis.LT = globalThis.LT || {};
         this.note(`流译：${this.error}`, 'err', false);
         this.emit();
       }
+    }
+
+    async loadSource(videoId, settings, alive) {
+      let cachedMeta = (await LT.SubsCache.getMeta(videoId)) || null;
+      if (!alive()) return null;
+      let units = null;
+      let trackKey = '';
+      let trackLabel = '';
+      let isAsr = false;
+      if (cachedMeta && cachedMeta.trackKey) {
+        const src = await LT.SubsCache.getSource(videoId, cachedMeta.trackKey);
+        if (!alive()) return null;
+        const fits =
+          validSource(src) &&
+          (settings.sourceLang === 'auto' || langBase(src.lang) === langBase(settings.sourceLang));
+        if (fits) {
+          units = unpack(src.units);
+          trackKey = cachedMeta.trackKey;
+          trackLabel = cachedMeta.trackLabel || '';
+          isAsr = !!src.isAsr;
+        }
+      }
+      if (!units) {
+        // 原文失效后编号可能完全变化，不能走「旧设置缓存」的复用路径。
+        cachedMeta = null;
+        const read = await this.readTrack(videoId, settings, alive);
+        if (!read) return null;
+        ({ units, trackKey, trackLabel, isAsr } = read);
+      }
+      const sourceHash = LT.SubsCache.fingerprint(pack(units));
+      if (cachedMeta && cachedMeta.sourceHash && cachedMeta.sourceHash !== sourceHash) cachedMeta = null;
+      return { cachedMeta, units, trackKey, trackLabel, isAsr, sourceHash };
     }
 
     /** 从 YouTube 读取字幕轨并分句；失败抛错，任务被作废时返回 null。 */
