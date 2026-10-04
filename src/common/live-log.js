@@ -148,6 +148,12 @@ globalThis.LT = globalThis.LT || {};
     ].map((x) => String(x || '').trim()).filter(Boolean);
   }
 
+  /** 日志关闭时用它代替 null，调用方不必逐处判空。 */
+  const NOOP = Object.freeze({
+    details() {}, event() {}, audioChunk() {}, flushAudio() {},
+    finish() { return Promise.resolve(); },
+  });
+
   function open(opts, settings) {
     if (!['basic', 'detailed'].includes(opts.level)) return null;
     return new Recorder({ ...opts, secrets: secretsFrom(settings || {}) });
@@ -158,5 +164,5 @@ globalThis.LT = globalThis.LT || {};
     await chrome.storage.local.remove(key);
   }
 
-  LT.LiveLog = { open, list, remove, redact, safe, secretsFrom };
+  LT.LiveLog = { open, list, remove, redact, safe, secretsFrom, NOOP };
 })();
