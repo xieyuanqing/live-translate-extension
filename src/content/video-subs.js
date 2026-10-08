@@ -34,7 +34,7 @@ globalThis.LT = globalThis.LT || {};
   const validTexts = (arr, count) => Array.isArray(arr) && arr.length === count &&
     Array.from(arr).every(t => typeof t === 'string' && !!t.trim());
   const settingsHash = (settings) => {
-    const config = LT.TextModel.resolve(settings);
+    const config = LT.TextModel.resolve(settings, settings.subsProviderId, settings.subsModel);
     return LT.SubsCache.fingerprint({
       sourceLang: settings.sourceLang, targetLang: settings.targetLang,
       scene: LT.Settings.scene(settings), useMetadata: settings.useMetadata,
@@ -187,7 +187,7 @@ globalThis.LT = globalThis.LT || {};
     updateSettings(settings) {
       const meta = this.meta;
       if (!meta || !['ready', 'partial', 'error'].includes(this.phase)) return;
-      const config = LT.TextModel.resolve(settings);
+      const config = LT.TextModel.resolve(settings, settings.subsProviderId, settings.subsModel);
       this.staleConfig = meta.settingsHash
         ? meta.settingsHash !== settingsHash(settings)
         : meta.targetLang !== settings.targetLang || meta.sourceLang !== settings.sourceLang ||
@@ -316,7 +316,7 @@ globalThis.LT = globalThis.LT || {};
       this.emit();
 
       try {
-        const run = { videoId, settings, meta, tempContext, force, gen, config: LT.TextModel.resolve(settings) };
+        const run = { videoId, settings, meta, tempContext, force, gen, config: LT.TextModel.resolve(settings, settings.subsProviderId, settings.subsModel) };
         const source = await this.loadSource(videoId, settings, alive);
         if (!source || !alive()) return;
 

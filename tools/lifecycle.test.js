@@ -14,7 +14,7 @@ const deferred = () => {
 };
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 
-async function sessionHarness() {
+async function sessionHarness({ realSettings = false } = {}) {
   const video = { paused: false, muted: false, volume: 1 };
   const player = {};
   const clients = [], taps = [], statuses = [], subStarts = [], logs = [];
@@ -28,6 +28,7 @@ async function sessionHarness() {
     } },
   });
   load(ctx, 'src/common/constants.js');
+  load(ctx, 'src/common/settings.js');
   load(ctx, 'src/common/prompt.js');
   load(ctx, 'src/common/live-context.js');
   load(ctx, 'src/common/live-log.js');
@@ -44,12 +45,16 @@ async function sessionHarness() {
     return log;
   } };
   let settings = { ...LT.DEFAULTS, autoStartLive: false, useMetadata: false, apiKeys: 'test-only' };
+  const settingsAPI = LT.Settings;
   LT.Settings = {
     load: async () => settings,
     pickKey: s => s.apiKeys,
     keyList: s => s.apiKeys ? [s.apiKeys] : [],
     scene: s => s.scenes.find(x => x.id === s.sceneId),
+    provider: (s, id) => s.providers.find(p => p.id === (id || s.subsProviderId)) || s.providers.find(p => !p.kind || p.kind === 'text'),
+    serviceProvider: s => s.providers.find(p => p.kind === 'live' && p.id === s.liveProviderId) || { enabled: true },
   };
+  if (realSettings) LT.Settings = { ...settingsAPI, load: async () => settingsAPI.normalize(settings) };
   LT.CaptionLayer = class {
     mount(p) { this.player = p; this.mounted = true; } unmount() { this.mounted = false; }
     applySettings() {} clear() {} setStatus() {} setVisible() {}
@@ -155,6 +160,31 @@ test('运行中修改配置不改变本场连接凭据和方向', async () => {
   await flush();
   assert.equal(h.clients[0].opts.keyProvider(), 'test-only');
   assert.equal(h.clients[0].opts.targetLang, 'zh');
+});
+
+test('统一直播配置按 ID 启动，切换同类型配置只影响重开，停用配置不创建连接', async () => {
+  const h = await sessionHarness({ realSettings: true });
+  const providers = [
+    { id: 'text', kind: 'text', preset: 'openai' },
+    { id: 'live-a', kind: 'live', preset: 'gemini-live', apiKey: 'live-a-key', baseUrl: 'wss://live-a.example' },
+    { id: 'live-b', kind: 'live', preset: 'gemini-live', apiKey: 'live-b-key', baseUrl: 'wss://live-b.example' },
+    { id: 'live-off', kind: 'live', preset: 'qwen-live', enabled: false, apiKey: 'off-key', workspaceHost: 'workspace.cn-beijing.maas.aliyuncs.com' },
+    { id: 'speech', kind: 'speech', preset: 'microsoft-tts' },
+  ];
+  h.setSettings({ providers, liveProviderId: 'live-a' });
+  await h.LT.debug.start('test');
+  assert.equal(h.clients[0].opts.baseUrl, 'wss://live-a.example');
+  assert.equal(h.clients[0].opts.keyProvider(), 'live-a-key');
+  h.setSettings({ liveProviderId: 'live-b' });
+  h.message(h.LT.MSG.SETTINGS_CHANGED); await flush();
+  assert.equal(h.clients[0].opts.keyProvider(), 'live-a-key');
+  h.LT.debug.stop(); await h.LT.debug.start('test');
+  assert.equal(h.clients[1].opts.baseUrl, 'wss://live-b.example');
+  assert.equal(h.clients[1].opts.keyProvider(), 'live-b-key');
+  h.LT.debug.stop(); h.setSettings({ liveProviderId: 'live-off' });
+  await h.LT.debug.start('test');
+  assert.equal(h.clients.length, 2);
+  assert.equal(h.LT.debug.session.phase, 'idle');
 });
 
 test('千问选项使用独立凭据并冻结本场连接', async () => {

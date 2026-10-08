@@ -3,7 +3,7 @@
   "name": "流译 · YouTube 字幕、聊天与评论翻译",
   "short_name": "流译",
   "description": "直播翻译音频，视频字幕整片翻译并缓存；YouTube 聊天、评论翻译；划词翻译与日英朗读，支持微软和 Gemini 语音。",
-  "version": "0.4.5",
+  "version": "0.4.8",
   "permissions": [
     "storage",
     "unlimitedStorage",
@@ -117,6 +117,8 @@
         "src/common/constants.js",
         "src/common/settings.js",
         "src/common/youtube-text.js",
+        "src/subs/net.js",
+        "src/subs/text-model.js",
         "src/content/youtube-chat.js"
       ],
       "css": [

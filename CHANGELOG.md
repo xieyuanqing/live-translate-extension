@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.8 — unreleased (2026-10-08)
+
+- Separate provider connections from feature choices. The API provider editor stores credentials, endpoints and a directory of multiple models; it does not assign translation purposes. Under API 与模型, 功能分配 is the single place to select an interface and model for each feature. Feature pages show the current choice and link to its assignment instead of repeating the controls. API 提供商 filters connections by all, live translation, text models and original-text reading.
+- The Add Provider dialog now shows only services that can be configured; remove the unavailable DeepL/DeepLX entries.
+- Migrate legacy per-provider text models to the feature model fields under provider schema 3. Preserve independent model choices through saves and backups; switching a feature's provider clears only that feature's model. The selection panel can choose and save an exact provider/model pair.
+- Let YouTube chat choose Chrome's local translator or a configured text API. Cloud chat batches visible messages, validates numbered translations, caches results per model and cancels old work on configuration changes. Local translation remains the default.
+- Update the responsive settings layout, setup guidance and popup descriptions. Syntax/self-tests and all 184 simulated regressions pass. An offline Chrome preview checks all seven feature deep links, read-only feature summaries and their updates, four provider filters without changing assignments, and 1440/390 px layouts in light/dark themes without horizontal overflow, script errors or network requests. Real extension, provider-account and YouTube workflows still need manual validation.
+
+## 0.4.7 — unreleased (2026-10-05)
+
+- Put text models, live translation and speech in one provider list/editor; remove the configuration tabs. Add multiple independent Gemini/Qwen live or Microsoft/Gemini speech profiles, with per-profile credentials, endpoints, models and voices. Live models remain fixed; playback rate stays a feature preference. Feature selectors filter by kind and retain independent ids.
+- Keep official text-model choices plus one custom API entry with OpenAI-compatible/Gemini protocol selection. Remove the Ark, OpenRouter and SiliconFlow creation presets while preserving existing configurations as custom APIs. DeepL/DeepLX remain unavailable dialog entries.
+- Migrate legacy live/speech fields into `providers[]` under provider schema 2. Save and back up profile connection fields; derive legacy runtime fields only when loading a frozen task configuration. Retain enable, usage, copy and ordering controls; deletion requires an enabled replacement of the same kind and cannot remove that kind's last profile.
+- Use the single `#models` route; older category links select the matching profile before replacing the route.
+- Syntax/self-tests and all 178 simulated regressions pass. Offline Chrome passes 77 UI checks at 1440/390 px in light/dark themes, with zero script errors and network requests. The ZIP contains 60 runtime files matching the source byte-for-byte and a version 0.4.7 manifest at its root; `git diff --check` passes. Real YouTube workflows, API accounts, live audio and native Chrome permission dialogs remain unverified.
+
+## 0.4.6 — unreleased (2026-10-05)
+
+- Replace the preset dropdown with a grouped Add Provider dialog and a provider list/editor. Show the fixed service identity, editable name and optional note, key visibility, base URL, model selection, custom headers and tests. DeepL/DeepLX remain unavailable dialog entries and cannot create configurations or send requests; remove the standalone future-service cards and duplicate chat-interface tab.
+- Add enable switches, feature-use counts and provider ordering. Disabling an unused provider keeps its settings and removes it from feature choices; assigned providers cannot be disabled. Folded usage switches explicitly enable the target and replace only the selected feature assignment. Copying creates an independent configuration; deleting an assigned provider requires an enabled replacement.
+- Persist provider preset identity, enabled state and description. Infer known provider identities from older configurations' protocol and address, preserving unrecognized endpoints as custom. Keep credentials, model choices, order and independently selected feature ids; enabling or sorting a provider does not select it automatically.
+- Keep live Gemini/Qwen and Microsoft/Gemini speech on their existing dedicated clients. Chrome's fixed local chat translator stays under Chat & Comments.
+- Syntax checks for 68 JavaScript files, algorithm self-tests and all 164 simulated regressions pass. Offline Chromium passes 49 checks for the page/dialog at 1440/390 px in light/dark themes, including mobile enable controls, independent configurations and fixed presets, feature assignments, disabling/deleting/copying, drag ordering, keyboard interaction and unavailable entries that cannot be saved; no script errors or network requests occur. Packaging produces the 0.4.6 ZIP with 60 runtime files, and `git diff --check` passes. Real service accounts, native Chrome permission dialogs and current YouTube workflows remain unverified; the 0.4.5 results below describe that earlier implementation.
+
 ## 0.4.5 — unreleased (2026-10-05)
 
 - Add text-interface presets for DeepSeek, SiliconFlow, Ark, Bailian (Beijing/Singapore), OpenRouter, Groq and Moonshot alongside OpenAI/Gemini. Presets create independent configurations without changing credentials or feature assignments.

@@ -128,7 +128,8 @@ async function harness(patch = {}) {
     status: () => message(LT.MSG.QUERY_TEXT_STATUS),
     translate: () => message(LT.MSG.TRANSLATE_VISIBLE_COMMENTS),
     async update(patch) {
-      raw = LT.Settings.normalize({ ...raw, ...patch });
+      const changes = typeof patch === 'function' ? patch(raw) : patch;
+      raw = LT.Settings.normalize({ ...raw, ...changes });
       for (const listener of storageListeners) listener({ settings: { newValue: raw } }, 'local');
       // 存储读取是立即兑现的 Promise；到下一个事件循环时本次读取、重置和扫描调度均已完成。
       await tick(); runTimers();
@@ -184,7 +185,9 @@ test('Gemini 复用多直播 Key 重读不取消，Key 列表变化取消旧请�
   await h.update({}); await h.update({});
   assert.equal(h.calls[0].signal.aborted, false);
   assert.equal(h.calls.length, 1);
-  await h.update({ apiKeys: 'test-live-a, test-live-c' });
+  // 迁移后的凭据以统一提供商为准，旧 apiKeys 只是运行快照的投影。
+  await h.update(settings => ({ providers: settings.providers.map(provider => provider.preset === 'gemini-live'
+    ? { ...provider, apiKey: 'test-live-a, test-live-c' } : provider) }));
   assert.equal(h.calls[0].signal.aborted, true);
   h.complete(0, '旧 Key 列表的迟到译文');
   await tick();

@@ -519,7 +519,7 @@ console.log('\n[9] 缓存指纹、字幕提示词与设置');
   });
   check(
     '文字模型接口配置归一化：范围收敛、去重、选用回落、旧字段清掉',
-    s.providers.length === 1 && s.providers[0].apiType === 'gemini' && s.providers[0].concurrency === 6 &&
+    LT.Settings.providersFor(s, 'text').length === 1 && s.providers[0].apiType === 'gemini' && s.providers[0].concurrency === 6 &&
       s.providers[0].requestPath === 'auto' && s.providers[0].baseUrl === 'https://a.b/v1' &&
       s.subsProviderId === 'a' && !('textApiKey' in s),
     JSON.stringify(s.providers)
@@ -527,7 +527,7 @@ console.log('\n[9] 缓存指纹、字幕提示词与设置');
   const empty = LT.Settings.normalize({ providers: [] });
   check(
     '没有接口配置时补一套默认 OpenAI 兼容配置',
-    empty.providers.length === 1 && empty.providers[0].apiType === 'openai' && empty.subsProviderId === empty.providers[0].id
+    LT.Settings.providersFor(empty, 'text').length === 1 && empty.providers[0].apiType === 'openai' && empty.subsProviderId === empty.providers[0].id
   );
   const fresh = LT.Settings.newProvider({ apiType: 'openai', id: 'ignored' });
   check('新建配置带新 id', fresh.id !== 'ignored' && fresh.apiType === 'openai' && fresh.concurrency === 3);

@@ -11,30 +11,28 @@
   let saveQueue = Promise.resolve();
   let pendingThemeRevision = null;
   let currentPage = 'general', appearanceTab = 'caption', setupRevision = 0;
-  let expandedLiveProvider = '', expandedSpeechProvider = '';
   const testedProviders = new Map();
 
   const PAGES = ['general', 'live', 'video', 'text', 'speech', 'models', 'style', 'data', 'about'];
   const PAGE_INFO = {
     general: ['语言与背景', '设定翻译方向，补充常用的人名与背景。'],
-    live: ['实时翻译', '选择直播接口，设置开播前的背景与术语整理。'],
+    live: ['实时翻译', '设置直播翻译行为，以及开播前的背景与术语整理。'],
     video: ['整片字幕', '读取视频字幕，翻译后保存在本机，方便下次观看。'],
-    text: ['聊天与评论', '聊天使用本地翻译，评论按需调用所选接口。'],
-    speech: ['划词与朗读', '选择划词翻译和原文朗读接口，调整音色与语速。'],
-    models: ['接口', ''],
+    text: ['聊天与评论', '聊天可选 Chrome 本地翻译或文字模型接口，评论按需翻译。'],
+    speech: ['划词与朗读', '查看划词翻译和原文朗读的当前接口，调整朗读语速。'],
+    models: ['API 与模型', '集中选择各功能使用的接口和模型，并管理接口连接。'],
     style: ['外观', '设置界面主题、字幕和评论／聊天译文的样式。'],
     data: ['数据与备份', '管理字幕缓存，导入或导出设置。'],
     about: ['高级与关于', '查看提示词、诊断日志和版本信息。'],
   };
   const PAGE_KEY = 'lt-options-page';
-  const TEXT_FIELDS = ['apiKeys', 'baseUrl', 'qwenWorkspaceHost', 'qwenApiKey', 'manualContext', 'subsExtraInstruction'];
+  const TEXT_FIELDS = ['manualContext', 'subsExtraInstruction'];
   const SELECT_OPTIONS = {
     uiTheme: [
       { code: 'system', label: '跟随系统（默认）' },
       { code: 'light', label: '浅色' },
       { code: 'dark', label: '深色' },
     ],
-    liveProvider: LT.LIVE_PROVIDERS,
     debugLogLevel: LT.LOG_LEVELS,
     sourceLang: LT.SOURCE_LANGS,
     targetLang: LT.TARGET_LANGS,
@@ -44,12 +42,16 @@
       { code: '120', label: '120 秒' },
     ],
   };
-  const PROVIDER_SELECTS = {
-    modelContextProviderId: 'liveContextProviderId',
-    modelSubsProviderId: 'subsProviderId',
-    modelSelectionProviderId: 'selectionProviderId',
-    modelCommentProviderId: 'commentProviderId',
-  };
+  const PURPOSES = [
+    { id: 'live', title: '实时音频翻译', description: '从播放器音频生成实时译文', icon: '实', kind: 'live', providerField: 'liveProviderId', stateId: 'liveSetupState', page: 'live' },
+    { id: 'context', title: '直播背景整理', description: '开播前整理本场背景和术语', icon: '整', kind: 'text', providerField: 'liveContextProviderId', modelField: 'liveContextModel', stateId: 'contextSetupState', page: 'live' },
+    { id: 'subs', title: '整片字幕', description: '翻译视频字幕并缓存到本机', icon: '字', kind: 'text', providerField: 'subsProviderId', modelField: 'subsModel', stateId: 'subsSetupState', page: 'video' },
+    { id: 'chat', title: '聊天弹幕', description: '自动翻译新消息，也可使用 Chrome 本地翻译', icon: '聊', kind: 'text', providerField: 'chatProviderId', modelField: 'chatModel', stateId: 'chatSetupState', page: 'text' },
+    { id: 'comment', title: '评论翻译', description: '按需翻译评论与回复', icon: '评', kind: 'text', providerField: 'commentProviderId', modelField: 'commentModel', stateId: 'commentSetupState', page: 'text' },
+    { id: 'selection', title: '划词翻译', description: '翻译网页上选中的文字', icon: '划', kind: 'text', providerField: 'selectionProviderId', modelField: 'selectionModel', stateId: 'selectionSetupState', page: 'speech' },
+    { id: 'speech', title: '原文朗读', description: '朗读选中的日语或英语原文', icon: '读', kind: 'speech', providerField: 'ttsProviderId', stateId: 'speechSetupState', page: 'speech' },
+  ];
+  const modelControls = [];
   const CHECK_FIELDS = ['autoStartLive', 'pauseOnAd', 'useMetadata', 'echoTargetLanguage', 'generateLiveContext',
     'autoShowCached', 'enableChatTranslation', 'enableCommentTranslation'];
   const RANGE_FIELDS = ['metadataLimit', 'rotateSeconds', 'stabIdleMs', 'stabMaxChars'];
@@ -86,8 +88,10 @@
     Object.assign(settings, patch);
     if (Object.hasOwn(patch, 'uiTheme')) pendingThemeRevision = LT.UITheme.apply(settings.uiTheme);
     renderLiveProvider();
+    speech.render?.();
     renderPreview();
     renderProviderSelect();
+    renderPurposeSummaries();
     renderSetup();
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
@@ -121,19 +125,9 @@
   }
 
   function renderLiveProvider() {
-    $('geminiPromptPreview').classList.toggle('hidden', settings.liveProvider === 'qwen');
-    $('qwenModeHint').classList.toggle('hidden', settings.liveProvider !== 'qwen');
-    $('liveServiceSummary').textContent = LT.LIVE_PROVIDERS.find(provider => provider.code === settings.liveProvider)?.label || '';
-    // 首次显示和切换用途时展开当前接口；编辑备用接口不会切换功能选用。
-    if (expandedLiveProvider !== settings.liveProvider) {
-      expandedLiveProvider = settings.liveProvider;
-      $('geminiLiveFields').open = settings.liveProvider === 'gemini';
-      $('qwenLiveFields').open = settings.liveProvider === 'qwen';
-    }
-    if (expandedSpeechProvider !== settings.ttsProvider) {
-      expandedSpeechProvider = settings.ttsProvider;
-      $('geminiSpeechConfig').open = settings.ttsProvider === 'gemini';
-    }
+    const snapshot = LT.Settings.normalize(settings);
+    $('geminiPromptPreview').classList.toggle('hidden', snapshot.liveProvider === 'qwen');
+    $('qwenModeHint').classList.toggle('hidden', snapshot.liveProvider !== 'qwen');
   }
 
   /** 导入 / 恢复默认：整体写入后重载页面，所有卡片重新建立。 */
@@ -147,7 +141,12 @@
   // ---------- 分区导航 ----------
 
   function showPage(name) {
-    let [page, serviceTab] = name.split('/');
+    let [page, serviceTab, purposeId] = name.split('/');
+    // 旧聊天接口页已并入聊天功能页，保留已有书签的入口。
+    if (page === 'models' && serviceTab === 'chat') {
+      page = 'text';
+      history.replaceState(null, '', '#text');
+    }
     if (!PAGES.includes(page)) {
       try {
         page = localStorage.getItem(PAGE_KEY) || 'models';
@@ -175,12 +174,23 @@
     if (page === 'data') renderCache();
     if (page === 'about') dataUI.refreshLogs();
     if (page === 'models') {
-      if (!['text', 'live', 'chat', 'speech'].includes(serviceTab)) serviceTab = 'text';
-      for (const panel of document.querySelectorAll('[data-service-panel]')) panel.hidden = panel.dataset.servicePanel !== serviceTab;
-      for (const tab of document.querySelectorAll('[data-service-tab]')) {
-        if (tab.dataset.serviceTab === serviceTab) tab.setAttribute('aria-current', 'true');
-        else tab.removeAttribute('aria-current');
+      const providersVisible = ['providers', 'text', 'live', 'speech'].includes(serviceTab);
+      $('purposePage').hidden = providersVisible;
+      $('providerPage').hidden = !providersVisible;
+      $('purposeTab').setAttribute('aria-selected', String(!providersVisible));
+      $('providerTab').setAttribute('aria-selected', String(providersVisible));
+      if (['text', 'live', 'speech'].includes(serviceTab)) {
+        const provider = settings.providers.find(item => item.kind === serviceTab);
+        if (provider) providers.edit(provider.id);
+        history.replaceState(null, '', '#models/providers');
       }
+      const purpose = serviceTab === 'purpose' ? PURPOSES.find(item => item.id === purposeId) : null;
+      for (const row of document.querySelectorAll('.purpose-row')) row.classList.toggle('targeted', row.id === `purpose-${purpose?.id}`);
+      if (purpose) requestAnimationFrame(() => {
+        const row = $(`purpose-${purpose.id}`);
+        row.scrollIntoView({ block: 'center' });
+        row.focus({ preventScroll: true });
+      });
     }
     renderSetup();
   }
@@ -205,12 +215,13 @@
     picker: $('providerPicker'),
     settings: () => settings,
     save: () => queueSave({}),
+    onCatalogChange: () => refreshModelControls(),
     onTest: ({ providerId, signature, settingsSignature, ok }) => {
       // 迟到的生成结果只能验证实际使用过的配置，不能把后来编辑的地址或模型标为通过。
       try {
         const snapshot = LT.Settings.normalize(settings);
         if (settingsSignature !== LT.OptionsUI.providerSignature(snapshot, providerId)) return;
-        const actual = JSON.parse(signature), current = LT.TextModel.resolve(snapshot, providerId);
+        const actual = JSON.parse(signature), current = LT.TextModel.resolve(snapshot, providerId, actual.model);
         const provider = snapshot.providers.find(p => p.id === providerId);
         if (!provider) return;
         const keys = provider.apiKey ? [provider.apiKey] : provider.apiType === 'gemini' ? LT.Settings.keyList(snapshot) : [''];
@@ -218,8 +229,9 @@
         const actualKey = actual.key;
         delete actual.key; delete current.key;
         if (!keys.includes(actualKey) || JSON.stringify(actual) !== JSON.stringify(current)) return;
-        if (ok) testedProviders.set(providerId, LT.OptionsUI.providerSignature(snapshot, providerId));
-        else testedProviders.delete(providerId);
+        const testId = `${providerId}/${current.model}`;
+        if (ok) testedProviders.set(testId, LT.OptionsUI.providerSignature(snapshot, providerId));
+        else testedProviders.delete(testId);
         renderSetup();
       } catch (_) { /* 已作废的测试结果 */ }
     },
@@ -238,22 +250,149 @@
     version: chrome.runtime.getManifest().version,
   });
 
-  // ---------- 各功能分别选用接口配置 ----------
+  // ---------- 集中分配各功能的接口和模型 ----------
+
+  function providerName(provider) {
+    return provider.name || LT.PROVIDER_PRESETS.find(item => item.code === provider.preset)?.label || '自定义 API';
+  }
 
   function renderProviderSelect() {
-    for (const [id, field] of Object.entries(PROVIDER_SELECTS)) {
-      const el = $(id);
+    for (const purpose of PURPOSES) {
+      const el = $(`purposeProvider-${purpose.providerField}`);
       el.replaceChildren();
-      for (const p of settings.providers) {
-        const opt = document.createElement('option');
-        opt.value = p.id;
-        const name = p.name || (p.apiType === 'gemini' ? 'Gemini' : 'OpenAI 兼容');
-        opt.textContent = `${name} · ${p.model || '未填写模型名'}`;
-        el.appendChild(opt);
+      if (purpose.id === 'chat') {
+        const local = document.createElement('option');
+        local.value = 'local'; local.textContent = 'Chrome 本地翻译';
+        el.appendChild(local);
       }
-      el.value = settings[field];
+      for (const provider of settings.providers) {
+        if (provider.kind !== purpose.kind) continue;
+        if (provider.enabled === false && provider.id !== settings[purpose.providerField]) continue;
+        const option = document.createElement('option');
+        option.value = provider.id;
+        option.textContent = `${providerName(provider)}${provider.enabled === false ? '（已停用）' : ''}`;
+        option.disabled = provider.enabled === false;
+        el.appendChild(option);
+      }
+      el.value = settings[purpose.providerField];
       el.title = el.selectedOptions[0]?.textContent || '';
     }
+  }
+
+  function renderPurposeSummaries() {
+    for (const purpose of PURPOSES) {
+      const node = document.querySelector(`[data-purpose-summary="${purpose.id}"]`);
+      const id = settings[purpose.providerField];
+      if (purpose.id === 'chat' && id === 'local') {
+        node.textContent = 'Chrome 本地翻译';
+        continue;
+      }
+      const provider = settings.providers.find(item => item.id === id);
+      const name = provider ? `${providerName(provider)}${provider.enabled === false ? '（已停用）' : ''}` : '未选择接口';
+      node.textContent = purpose.modelField ? `${name} · ${settings[purpose.modelField] || '未选择模型'}` : name;
+    }
+  }
+
+  function mountModelControl(host, purpose) {
+    const field = purpose.modelField;
+    const input = document.createElement('input');
+    input.type = 'text'; input.id = `${host.id}-input`;
+    input.setAttribute('aria-label', `${purpose.title}使用的模型`);
+    input.placeholder = '选择或填写模型 ID';
+    input.value = settings[field];
+    const picker = LT.OptionsUI.modelPicker(input, `choices-${host.id}`, value => {
+      settings[field] = value.trim();
+      queueSave({});
+    });
+    host.appendChild(picker.root);
+    modelControls.push({ input, picker, field, providerField: purpose.providerField });
+  }
+
+  function refreshModelControls(providerField) {
+    for (const control of modelControls) {
+      if (providerField && control.providerField !== providerField) continue;
+      const provider = settings.providers.find(p => p.id === settings[control.providerField]);
+      control.input.value = settings[control.field];
+      control.input.disabled = control.providerField === 'chatProviderId' && settings.chatProviderId === 'local';
+      control.picker.setItems(provider?.models || []);
+    }
+    $('purposeModel-chatModel').hidden = settings.chatProviderId === 'local';
+    $('purposeLocal-chat').hidden = settings.chatProviderId !== 'local';
+    $('chatLocalState').hidden = settings.chatProviderId !== 'local';
+    $('chatCloudState').hidden = settings.chatProviderId === 'local';
+  }
+
+  function choosePurposeProvider(providerField, id) {
+    if (settings[providerField] === id) return;
+    settings[providerField] = id;
+    const purpose = PURPOSES.find(item => item.providerField === providerField);
+    if (purpose?.modelField) settings[purpose.modelField] = '';
+    queueSave({});
+    refreshModelControls(providerField);
+  }
+
+  function mountPurposeAssignments() {
+    const box = $('purposeAssignments');
+    for (const purpose of PURPOSES) {
+      const row = document.createElement('div');
+      row.className = 'purpose-row';
+      row.id = `purpose-${purpose.id}`;
+      row.tabIndex = -1;
+      const identity = document.createElement('div');
+      identity.className = 'purpose-identity';
+      const icon = document.createElement('span');
+      icon.className = 'purpose-icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = purpose.icon;
+      const copy = document.createElement('div');
+      const title = document.createElement('div');
+      title.className = 'purpose-title'; title.textContent = purpose.title;
+      const description = document.createElement('div');
+      description.className = 'purpose-description'; description.textContent = purpose.description;
+      copy.append(title, description); identity.append(icon, copy);
+      const controls = document.createElement('div');
+      controls.className = 'purpose-controls';
+      const serviceBox = document.createElement('div');
+      const serviceLabel = document.createElement('label');
+      serviceLabel.className = 'purpose-control-label';
+      serviceLabel.htmlFor = `purposeProvider-${purpose.providerField}`;
+      serviceLabel.textContent = '接口';
+      const service = document.createElement('select');
+      service.id = `purposeProvider-${purpose.providerField}`;
+      service.addEventListener('change', () => choosePurposeProvider(purpose.providerField, service.value));
+      serviceBox.append(serviceLabel, service); controls.appendChild(serviceBox);
+      const modelControl = document.createElement('div');
+      if (purpose.modelField) {
+        const modelLabel = document.createElement('label');
+        modelLabel.className = 'purpose-control-label';
+        modelLabel.htmlFor = `purposeModel-${purpose.modelField}-input`;
+        modelLabel.textContent = '模型';
+        const modelBox = document.createElement('div');
+        modelBox.id = `purposeModel-${purpose.modelField}`;
+        mountModelControl(modelBox, purpose);
+        modelControl.append(modelLabel, modelBox);
+        if (purpose.id === 'chat') {
+          const localNote = document.createElement('div');
+          localNote.id = 'purposeLocal-chat'; localNote.className = 'purpose-description';
+          localNote.textContent = 'Chrome 本地翻译无需模型';
+          modelControl.appendChild(localNote);
+        }
+      } else {
+        modelControl.className = 'purpose-description purpose-fixed-note';
+        modelControl.textContent = purpose.kind === 'live' ? '模型由实时服务决定' : '音色在朗读提供商中设置';
+      }
+      controls.appendChild(modelControl);
+      const state = document.createElement('span');
+      state.id = `purposeState-${purpose.id}`; state.className = 'purpose-state';
+      const link = document.createElement('a');
+      link.className = 'purpose-settings-link'; link.href = '#models/providers';
+      link.textContent = '配置该接口 →';
+      link.addEventListener('click', () => {
+        const id = settings[purpose.providerField];
+        if (id && id !== 'local') providers.edit(id);
+      });
+      row.append(identity, controls, state, link);
+      box.appendChild(row);
+    }
+    renderProviderSelect(); refreshModelControls(); renderPurposeSummaries();
   }
 
   async function renderSetup() {
@@ -268,60 +407,78 @@
       return { ...state, authorized: await checks.get(key) };
     }
     const purposes = [
-      ['liveSetupState', '实时翻译', describe(snapshot, 'live')],
-      ['contextSetupState', 'AI 整理', describe(snapshot, 'text', snapshot.liveContextProviderId), snapshot.liveContextProviderId],
-      ['subsSetupState', '整片字幕', describe(snapshot, 'text', snapshot.subsProviderId), snapshot.subsProviderId],
-      ['selectionSetupState', '划词翻译', describe(snapshot, 'text', snapshot.selectionProviderId), snapshot.selectionProviderId],
-      ['commentSetupState', '评论翻译', describe(snapshot, 'text', snapshot.commentProviderId), snapshot.commentProviderId],
-      ['speechSetupState', '原文朗读', describe(snapshot, 'speech')],
+      ['liveSetupState', '实时翻译', describe(snapshot, 'live', snapshot.liveProviderId), snapshot.liveProviderId],
+      ['contextSetupState', 'AI 整理', describe(snapshot, 'text', snapshot.liveContextProviderId, snapshot.liveContextModel), snapshot.liveContextProviderId, snapshot.liveContextModel],
+      ['subsSetupState', '整片字幕', describe(snapshot, 'text', snapshot.subsProviderId, snapshot.subsModel), snapshot.subsProviderId, snapshot.subsModel],
+      ['selectionSetupState', '划词翻译', describe(snapshot, 'text', snapshot.selectionProviderId, snapshot.selectionModel), snapshot.selectionProviderId, snapshot.selectionModel],
+      ['commentSetupState', '评论翻译', describe(snapshot, 'text', snapshot.commentProviderId, snapshot.commentModel), snapshot.commentProviderId, snapshot.commentModel],
+      ['speechSetupState', '原文朗读', describe(snapshot, 'speech', snapshot.ttsProviderId), snapshot.ttsProviderId],
+      ['chatSetupState', '聊天弹幕', snapshot.chatProviderId === 'local' ? { complete: true, origins: [], missing: [] }
+        : describe(snapshot, 'text', snapshot.chatProviderId, snapshot.chatModel), snapshot.chatProviderId, snapshot.chatModel],
     ];
-    const states = await Promise.all(purposes.map(async ([id, label, state, providerId]) => [id, label, await permission(state), providerId]));
-    const allText = await Promise.all(snapshot.providers.map(p => permission(describe(snapshot, 'text', p.id))));
+    const states = await Promise.all(purposes.map(async ([id, label, state, providerId, model]) => [id, label, await permission(state), providerId, model]));
+    const allProfiles = await Promise.all(snapshot.providers.map(p => permission(describe(snapshot, p.kind, p.id, null))));
     if (revision !== setupRevision) return;
     const editingId = $('providerPicker').value;
     const editingIndex = snapshot.providers.findIndex(p => p.id === editingId);
-    if (editingIndex >= 0) states.push(['providerSetupState', '当前接口', allText[editingIndex], editingId]);
+    if (editingIndex >= 0) states.push(['providerSetupState', '当前提供商', allProfiles[editingIndex], editingId]);
     const ready = state => state.complete && state.authorized !== false;
-    for (const [id, label, state, providerId] of states) {
+    for (const [id, label, state, providerId, model] of states) {
       const node = $(id);
       node.replaceChildren();
       if (id === 'providerSetupState') {
-        const tested = testedProviders.get(providerId) === LT.OptionsUI.providerSignature(snapshot, providerId);
+        const profile = snapshot.providers.find(provider => provider.id === providerId);
         node.textContent = !state.complete ? `当前接口尚缺${state.missing.join('、')}。`
-          : tested ? '本次生成测试通过。' : '配置已填写，生成测试可验证实际可用性。';
-        node.dataset.state = !state.complete ? 'missing' : tested ? 'tested' : 'ready';
+          : state.authorized === false ? '接口域名尚未授权，请在地址下方授权。'
+          : profile.kind === 'text' ? '连接信息已填写；可获取模型列表或逐个测试模型。'
+          : profile.preset === 'microsoft-tts' ? '微软接口无需 Key，可直接试听。' : '配置已填写，到功能页面验证实际可用性。';
+        node.dataset.state = !ready(state) ? 'missing' : 'ready';
         continue;
       }
       const message = !state.complete ? `尚缺${state.missing.join('、')}` : state.authorized === false ? '尚需浏览器授权'
-        : providerId && testedProviders.get(providerId) === LT.OptionsUI.providerSignature(snapshot, providerId) ? '本次生成测试通过'
+        : providerId && model && snapshot.providers.find(profile => profile.id === providerId)?.kind === 'text'
+          && testedProviders.get(`${providerId}/${model}`) === LT.OptionsUI.providerSignature(snapshot, providerId) ? '本次生成测试通过'
+        : id === 'chatSetupState' && providerId === 'local' ? 'Chrome 本地翻译，在弹窗准备语言包'
         : id === 'speechSetupState' && snapshot.ttsProvider === 'microsoft' ? '微软接口无需 Key，可直接试听' : '已配置，实际可用性需测试';
       node.textContent = `${label}：${message}`;
       node.dataset.state = !ready(state) ? 'missing' : message === '本次生成测试通过' ? 'tested' : 'ready';
+      const purpose = PURPOSES.find(item => item.stateId === id);
+      const purposeState = $(`purposeState-${purpose.id}`);
+      purposeState.textContent = message;
+      purposeState.dataset.state = node.dataset.state;
+      $(`purpose-${purpose.id}`).querySelector('.purpose-settings-link').hidden = !providerId || providerId === 'local';
       if (!ready(state)) {
-        const link = document.createElement('a'); link.href = state.route; link.textContent = '去配置';
-        link.addEventListener('click', () => { if (providerId) providers.edit(providerId); });
+        const link = document.createElement('a');
+        const connectionMissing = state.missing.some(value => value !== '模型');
+        link.href = connectionMissing ? '#models/providers' : `#models/purpose/${purpose.id}`; link.textContent = '去配置';
+        if (connectionMissing) link.addEventListener('click', () => { if (providerId) providers.edit(providerId); });
         node.append(' · ', link);
       }
     }
-    const live = states[0][2], text = states[2][2], selection = states[3][2], comment = states[4][2], speechState = states[5][2];
+    const live = states[0][2], text = states[2][2], selection = states[3][2], comment = states[4][2], speechState = states[5][2], chat = states[6][2];
     let required = null, message = '';
     if (currentPage === 'live' && !ready(live)) { required = live; message = '实时翻译接口尚未配置完成。'; }
     if (currentPage === 'video' && !ready(text)) { required = text; message = '整片字幕接口尚未配置完成。'; }
-    if (currentPage === 'text' && snapshot.enableCommentTranslation && !ready(comment)) { required = comment; message = '评论接口尚未配置完成；本地聊天翻译不受影响。'; }
+    if (currentPage === 'text' && snapshot.enableChatTranslation && !ready(chat)) { required = chat; message = '聊天翻译接口尚未配置完成。'; }
+    if (currentPage === 'text' && snapshot.enableCommentTranslation && !ready(comment)) { required = comment; message = '评论接口尚未配置完成。'; }
     if (currentPage === 'speech' && (!ready(selection) || !ready(speechState))) {
       required = !ready(selection) ? selection : speechState;
       message = !ready(selection) ? '划词翻译接口尚未配置完成。' : '朗读接口尚未配置完成。';
     }
-    if (!required && !ready(live) && !allText.some(ready) && ['general', 'models'].includes(currentPage)) {
-      required = currentPage === 'models' && location.hash === '#models/live' ? live : text;
-      message = '先配置一个翻译接口，再到 YouTube 打开流译开始翻译。';
+    const allText = allProfiles.filter((state, index) => snapshot.providers[index].kind === 'text');
+    if (!required && currentPage === 'general' && !ready(live) && !allText.some(ready)) {
+      required = text;
+      message = '先配置一个翻译提供商，再到 YouTube 打开流译开始翻译。';
     }
     $('setupBanner').hidden = !required;
     $('setupMessage').textContent = message;
-    $('setupLink').href = required?.route || '#models/text';
+    const needsConnection = required?.authorized === false || required?.missing?.some(value => value !== '模型');
+    const requiredEntry = states.find(entry => entry[2] === required);
+    const requiredPurpose = PURPOSES.find(item => item.stateId === requiredEntry?.[0]);
+    $('setupLink').href = needsConnection ? '#models/providers' : `#models/purpose/${requiredPurpose?.id || 'live'}`;
     $('setupLink').onclick = () => {
-      const purpose = currentPage === 'text' ? snapshot.commentProviderId : currentPage === 'speech' ? snapshot.selectionProviderId : snapshot.subsProviderId;
-      if (required?.route === '#models/text') providers.edit(purpose);
+      const profileId = requiredEntry?.[3];
+      if (needsConnection && profileId && profileId !== 'local') providers.edit(profileId);
     };
   }
 
@@ -524,8 +681,6 @@
       el.addEventListener('change', () => queueSave({ [id]: el.value }));
     }
     renderLiveProvider();
-    LT.OptionsUI.mountHostAccess({ container: $('qwenAccess'), buttonId: 'grantQwenAccess', statusId: 'qwenPermissionState',
-      getTarget: () => ({ origins: ['<all_urls>'], label: 'Chrome 所有网站权限（用于千问连接认证）', scopeLabel: '所有网站权限', button: '授权', missingText: '请先授权，再启动千问直播翻译。' }) });
 
     for (const id of CHECK_FIELDS) {
       const el = $(id);
@@ -546,26 +701,24 @@
       });
     }
 
-    renderProviderSelect();
-    for (const [id, field] of Object.entries(PROVIDER_SELECTS)) {
-      $(id).addEventListener('change', () => {
-        queueSave({ [field]: $(id).value });
-        providers.render();
-      });
-    }
+    mountPurposeAssignments();
 
-    for (const preset of LT.TEXT_PRESETS) {
-      const option = document.createElement('option');
-      option.value = preset.code;
-      option.textContent = preset.label;
-      $('providerPreset').appendChild(option);
-    }
-    $('addProvider').addEventListener('click', () => {
-      const preset = LT.TEXT_PRESETS.find(item => item.code === $('providerPreset').value);
-      const provider = LT.Settings.newProvider({ name: preset.code === 'custom' ? '' : preset.label, apiType: preset.apiType, baseUrl: preset.baseUrl });
-      settings.providers.push(provider);
-      queueSave({});
-      providers.render(provider.id);
+    LT.OptionsUI.mountProviderPicker({
+      button: $('addProvider'),
+      dialog: $('providerDialog'),
+      closeButton: $('closeProviderDialog'),
+      catalog: $('providerCatalog'),
+      onChoose: preset => {
+        const existing = new Set(settings.providers.map(provider => provider.name
+          || LT.PROVIDER_PRESETS.find(item => item.code === provider.preset)?.label || '自定义 API'));
+        let name = preset.label, number = 2;
+        while (existing.has(name)) name = `${preset.label} ${number++}`;
+        const provider = LT.Settings.newProvider({ preset: preset.code, kind: preset.kind, name, apiType: preset.apiType, baseUrl: preset.baseUrl });
+        settings.providers.push(provider);
+        queueSave({});
+        providers.render(provider.id);
+        $(`provider-${encodeURIComponent(provider.id)}-${provider.kind === 'text' ? 'key' : 'apiKey'}`)?.focus();
+      },
     });
 
     $('addScene').addEventListener('click', () => {
@@ -602,6 +755,7 @@
     $('mobilePageSelect').addEventListener('change', event => { location.hash = event.target.value; });
     $('providerPicker').addEventListener('change', renderSetup);
     $('providerList').addEventListener('click', renderSetup);
+    $('providerKindFilters').addEventListener('click', renderSetup);
     for (const button of $('appearanceTabs').querySelectorAll('[data-appearance-tab]')) {
       button.addEventListener('click', () => showAppearance(button.dataset.appearanceTab));
     }

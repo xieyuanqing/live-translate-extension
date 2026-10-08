@@ -131,19 +131,23 @@ globalThis.LT = globalThis.LT || {};
     apiKeys: '', // 英文逗号分隔多个，会话开始时随机选一个
     baseUrl: LT.DEFAULT_BASE_URL,
     liveProvider: 'gemini',
+    liveProviderId: '', // 直播功能绑定统一提供商配置
     qwenWorkspaceHost: '', // 只存工作空间域名，不存用户专属地址到源码
     qwenApiKey: '',
     generateLiveContext: true, // 开播前用选中的文字模型整理短背景和术语
     liveContextProviderId: '', // AI 整理独立选用；首次读取旧设置时保留原来的接口选择
     liveContextTimeoutSeconds: 60, // 包含连接、模型等待和收完整个回答
     debugLogLevel: 'off', // 显式开启后才把直播诊断记录写入本机扩展存储
-    enableChatTranslation: false, // YouTube 聊天：Chrome 本机翻译，单独开关
+    enableChatTranslation: false, // YouTube 聊天：默认 Chrome 本机翻译，也可显式选择文字接口
+    chatProviderId: 'local',
+    chatModel: '',
     enableCommentTranslation: false, // YouTube 评论：独立选用文字接口，按需翻译
     commentTranslationStyle: 'plain',
     chatTranslationStyle: 'plain',
     commentTranslationColor: '#3478b8',
     chatTranslationColor: '#3478b8',
     ttsProvider: 'microsoft',
+    ttsProviderId: '', // 朗读功能绑定统一提供商配置
     ttsMicrosoftJaVoice: 'ja-JP-NanamiNeural',
     ttsMicrosoftEnVoice: 'en-US-JennyNeural',
     ttsGeminiApiKey: '',
@@ -154,6 +158,9 @@ globalThis.LT = globalThis.LT || {};
     ttsRate: 1,
     selectionProviderId: '', // 划词翻译独立选用文字模型；旧设置首次沿用整片字幕模型
     commentProviderId: '', // 评论独立选用文字接口；旧设置首次沿用整片字幕接口
+    selectionModel: '',
+    commentModel: '',
+    liveContextModel: '',
 
     sourceLang: 'ja',
     targetLang: 'zh',
@@ -184,13 +191,14 @@ globalThis.LT = globalThis.LT || {};
     captionSourceScale: 0.78, // 原文字号相对译文的比例
     pauseOnAd: true,
 
-    // ---- 文字模型：AI 整理与整片字幕分别按 liveContextProviderId / subsProviderId 选用 ----
+    // ---- 文字接口仅保存连接和模型目录；每项功能单独保存所用模型 ----
     // 每套：{ id, name, apiType: gemini | openai, baseUrl（空用官方地址）, apiKey（Gemini 空则复用 Live Key）,
-    //        model（用账号实际可用的名字，不预填）, concurrency（并发请求数）, requestPath: auto | direct | relay }
+    //        models（可用模型 ID 目录）, concurrency（并发请求数）, requestPath: auto | direct | relay }
     providers: [
-      { id: 'p-default', name: '', apiType: 'openai', baseUrl: '', apiKey: '', model: '', concurrency: 3, requestPath: 'auto' },
+      { id: 'p-default', name: '', kind: 'text', preset: 'custom', apiType: 'openai', baseUrl: '', apiKey: '', models: [], concurrency: 3, requestPath: 'auto' },
     ],
     subsProviderId: 'p-default',
+    subsModel: '',
     autoShowCached: true, // 打开已翻译过的视频时自动显示缓存字幕
     subsExtraInstruction: '', // 只对整片字幕有意义的附加指令（错听规律、术语表），进系统提示词和缓存指纹
   };
@@ -222,19 +230,22 @@ globalThis.LT = globalThis.LT || {};
     { code: 'openai', label: 'OpenAI 兼容 chat/completions' },
     { code: 'gemini', label: 'Gemini generateContent' },
   ];
-  // 预设仅填写协议和基础地址，模型由用户手填或从接口获取，不绑定厂商模型清单。
-  LT.TEXT_PRESETS = [
-    { code: 'custom', label: '自定义接口', apiType: 'openai', baseUrl: '' },
-    { code: 'gemini', label: 'Gemini', apiType: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' },
-    { code: 'openai', label: 'OpenAI', apiType: 'openai', baseUrl: 'https://api.openai.com/v1' },
-    { code: 'deepseek', label: 'DeepSeek', apiType: 'openai', baseUrl: 'https://api.deepseek.com' },
-    { code: 'siliconflow', label: '硅基流动', apiType: 'openai', baseUrl: 'https://api.siliconflow.cn/v1' },
-    { code: 'ark', label: '火山方舟（北京）', apiType: 'openai', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3' },
-    { code: 'bailian', label: '阿里百炼（北京）', apiType: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
-    { code: 'bailian-intl', label: '阿里百炼（新加坡）', apiType: 'openai', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' },
-    { code: 'openrouter', label: 'OpenRouter', apiType: 'openai', baseUrl: 'https://openrouter.ai/api/v1' },
-    { code: 'groq', label: 'Groq', apiType: 'openai', baseUrl: 'https://api.groq.com/openai/v1' },
-    { code: 'moonshot', label: '月之暗面', apiType: 'openai', baseUrl: 'https://api.moonshot.cn/v1' },
+  // 提供商身份与请求协议分开；各功能引用配置 id，待接入项只出现在添加列表。
+  LT.PROVIDER_PRESETS = [
+    { code: 'openai', label: 'OpenAI', kind: 'text', apiType: 'openai', baseUrl: 'https://api.openai.com/v1', group: 'llm' },
+    { code: 'deepseek', label: 'DeepSeek', kind: 'text', apiType: 'openai', baseUrl: 'https://api.deepseek.com', group: 'llm' },
+    { code: 'gemini', label: 'Gemini', kind: 'text', apiType: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', group: 'llm' },
+    { code: 'bailian', label: '阿里百炼（北京）', kind: 'text', apiType: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', group: 'llm' },
+    { code: 'bailian-intl', label: '阿里百炼（新加坡）', kind: 'text', apiType: 'openai', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', group: 'llm' },
+    { code: 'groq', label: 'Groq', kind: 'text', apiType: 'openai', baseUrl: 'https://api.groq.com/openai/v1', group: 'llm' },
+    { code: 'moonshot', label: '月之暗面', kind: 'text', apiType: 'openai', baseUrl: 'https://api.moonshot.cn/v1', group: 'llm' },
+    { code: 'custom', label: '自定义 API', kind: 'text', apiType: 'openai', baseUrl: '', group: 'compatible' },
+    { code: 'gemini-live', label: 'Gemini 直播翻译', kind: 'live', baseUrl: LT.DEFAULT_BASE_URL, model: LT.MODEL, group: 'live' },
+    { code: 'qwen-live', label: '千问直播翻译', kind: 'live', model: LT.QWEN_MODEL, group: 'live' },
+    { code: 'microsoft-tts', label: '微软朗读', kind: 'speech', group: 'speech' },
+    { code: 'gemini-tts', label: 'Gemini 朗读', kind: 'speech', baseUrl: 'https://generativelanguage.googleapis.com', model: LT.DEFAULTS.ttsGeminiModel, group: 'speech' },
+    { code: 'deeplx', label: 'DeepLX', group: 'translation', pending: true },
+    { code: 'deepl', label: 'DeepL', group: 'translation', pending: true },
   ];
   LT.TEXT_DEFAULT_BASE = {
     gemini: 'https://generativelanguage.googleapis.com',

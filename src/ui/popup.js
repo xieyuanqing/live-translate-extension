@@ -259,7 +259,11 @@
     $('translateVisibleComments').disabled = !show || !settings.enableCommentTranslation || !!comments?.busy;
     $('cancelCommentTranslation').disabled = !comments?.busy;
     const chat = textStatus?.chat;
-    const chatLabels = { off: '已关闭', waiting: '请点击「准备本地翻译」', preparing: '准备/下载语言包中', ready: '本地翻译中', error: '不可用' };
+    const cloudChat = settings.chatProviderId !== 'local';
+    const chatLabels = cloudChat
+      ? { off: '已关闭', waiting: '连接云端接口中', preparing: '连接中', ready: '云端模型翻译中', error: '云端接口出错' }
+      : { off: '已关闭', waiting: '请点击「准备本地翻译」', preparing: '准备/下载语言包中', ready: '本地翻译中', error: '不可用' };
+    $('prepareChatTranslation').textContent = cloudChat ? '重试云端翻译' : '准备本地翻译';
     $('chatPrepareActions').classList.toggle('hidden', !settings.enableChatTranslation ||
       (chat?.phase === 'ready' && !chatPreparing && !chatPrepareMessage));
     $('prepareChatTranslation').classList.toggle('hidden', !settings.enableChatTranslation || chat?.phase === 'ready');
@@ -284,6 +288,19 @@
 
   $('prepareChatTranslation').addEventListener('click', async () => {
     if (chatPreparing || !settings.enableChatTranslation || !status?.onWatchPage) return;
+    if (settings.chatProviderId !== 'local') {
+      chatPreparing = true;
+      renderTextStatus();
+      try {
+        await settingsSave;
+        const result = await sendChat(LT.MSG.PREPARE_CHAT, { videoId: status.videoId,
+          sourceLang: settings.sourceLang, targetLang: settings.targetLang });
+        if (!result?.ok) throw new Error(result?.error || '聊天页面未响应，请刷新 YouTube 页面');
+        await refresh();
+      } catch (err) { chatPrepareMessage = err?.message || '云端翻译重试失败'; }
+      finally { chatPreparing = false; renderTextStatus(); }
+      return;
+    }
     const sourceLang = $('sourceLang').value;
     const targetLang = $('targetLang').value;
     const videoId = status.videoId;

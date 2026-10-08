@@ -18,12 +18,9 @@ globalThis.LT = globalThis.LT || {};
 
   /** 默认剔除 Key 和可能携带凭据的自定义请求头。 */
   function exportObject(settings, includeKeys, version) {
-    const copy = JSON.parse(JSON.stringify(LT.Settings.normalize(settings)));
+    const copy = JSON.parse(JSON.stringify(LT.Settings.persistable(settings)));
     if (!includeKeys) {
-      copy.apiKeys = '';
-      copy.qwenApiKey = '';
-      copy.ttsGeminiApiKey = '';
-      for (const p of copy.providers) { p.apiKey = ''; p.headers = {}; }
+      for (const p of copy.providers) { p.apiKey = ''; if (p.kind === 'text') p.headers = {}; }
     }
     return { app: APP, version, exportedAt: new Date().toISOString(), includesKeys: !!includeKeys, settings: copy };
   }
@@ -35,18 +32,16 @@ globalThis.LT = globalThis.LT || {};
     }
     const next = LT.Settings.normalize(raw.settings);
     if (!raw.includesKeys) {
-      next.apiKeys = current.apiKeys;
-      next.qwenApiKey = current.qwenApiKey;
-      next.ttsGeminiApiKey = current.ttsGeminiApiKey;
       for (const p of next.providers) {
-        const own = (current.providers || []).find((q) => q.id === p.id);
+        const own = (current.providers || []).find((q) => q.id === p.id) ||
+          (!(Number(raw.settings.providerSchema) >= 2) && p.kind !== 'text' && LT.Settings.providersFor(current, p.kind).find(q => q.preset === p.preset));
         if (own) {
           if (!p.apiKey) p.apiKey = own.apiKey;
-          if (!Object.keys(p.headers).length) p.headers = { ...own.headers };
+          if (p.kind === 'text' && !Object.keys(p.headers).length) p.headers = { ...own.headers };
         }
       }
     }
-    return next;
+    return LT.Settings.normalize(next);
   }
 
   function download(name, text) {
@@ -222,21 +217,16 @@ globalThis.LT = globalThis.LT || {};
       const current = ctx.settings();
       const next = LT.Settings.normalize({});
       if (keep) {
-        next.apiKeys = current.apiKeys;
-        next.qwenApiKey = current.qwenApiKey;
-        next.ttsGeminiApiKey = current.ttsGeminiApiKey;
-        next.liveProvider = current.liveProvider;
-        next.baseUrl = current.baseUrl;
-        next.qwenWorkspaceHost = current.qwenWorkspaceHost;
-        next.ttsProvider = current.ttsProvider;
-        next.ttsGeminiReuseKey = current.ttsGeminiReuseKey;
-        next.ttsGeminiBaseUrl = current.ttsGeminiBaseUrl;
-        next.ttsGeminiModel = current.ttsGeminiModel;
         next.providers = JSON.parse(JSON.stringify(current.providers));
+        next.providerSchema = 3;
+        next.liveProviderId = current.liveProviderId;
+        next.ttsProviderId = current.ttsProviderId;
         next.subsProviderId = current.subsProviderId;
         next.liveContextProviderId = current.liveContextProviderId;
         next.selectionProviderId = current.selectionProviderId;
         next.commentProviderId = current.commentProviderId;
+        next.chatProviderId = current.chatProviderId;
+        for (const field of ['subsModel', 'liveContextModel', 'selectionModel', 'commentModel', 'chatModel']) next[field] = current[field];
       }
       await ctx.replace(LT.Settings.normalize(next));
     });

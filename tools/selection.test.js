@@ -70,8 +70,9 @@ test('新增 Gemini Key 导出默认剔除、导入保留，错误与日志脱�
   const ctx = context(); load(ctx, 'src/ui/options-data.js'); load(ctx, 'src/common/live-log.js');
   const settings = ctx.LT.Settings.normalize({ ttsGeminiApiKey: 'private-test-key', ttsProvider: 'gemini' });
   const backup = ctx.LT.OptionsUI.exportObject(settings, false, '0.4.0');
-  assert.equal(backup.settings.ttsGeminiApiKey, '');
-  assert.equal(ctx.LT.OptionsUI.importObject(backup, settings).ttsGeminiApiKey, 'private-test-key');
+  assert.equal(backup.settings.ttsGeminiApiKey, undefined);
+  assert.ok(backup.settings.providers.every(p => !p.apiKey));
+  assert.equal(ctx.LT.OptionsUI.importObject(backup, settings).providers.find(p => p.preset === 'gemini-tts').apiKey, 'private-test-key');
   assert.ok(!ctx.LT.Selection.safeError(new Error('private-test-key failed'), settings).includes('private-test-key'));
   assert.ok(ctx.LT.LiveLog.secretsFrom(settings).includes('private-test-key'));
   assert.equal(JSON.stringify(ctx.LT.LiveLog.safe(settings, [], 1000)).includes('private-test-key'), false);
@@ -134,15 +135,115 @@ test('后台按浮窗指定的配置发送翻译，不把无效 id 悄悄退到�
     { id: 'second', apiType: 'openai', model: 'second-model' },
   ];
   const h = tasks({ customSettings: { providers, subsProviderId: 'first', selectionProviderId: 'second' },
-    translateResolve: (_settings, id) => { selected.push(id); return { key:'test', model:'test', baseUrl:'https://example.com' }; } });
+    translateResolve: (_settings, id, model) => { selected.push([id, model]); return { key:'test', model:'test', baseUrl:'https://example.com' }; } });
   const port = h.port();
-  port.receive({ type:'translate', text:'東京', providerId:'second', requestId:1 });
+  port.receive({ type:'translate', text:'東京', providerId:'second', model: 'selection-flash', requestId:1 });
   await waitFor(() => port.replies.some(item => item.type === 'translation' && item.requestId === 1), '应收到所选模型的译文');
-  assert.deepEqual(selected, ['second']);
+  assert.deepEqual(selected, [['second', 'selection-flash']]);
   port.receive({ type:'translate', text:'東京', providerId:'removed', requestId:2 });
   await waitFor(() => port.replies.some(item => item.type === 'translation' && item.requestId === 2), '应收到无效模型错误');
   assert.equal(selected.length, 1);
   assert.match(port.replies.at(-1).error, /已删除/);
+});
+
+test('同类型朗读配置按 ID 冻结不同 Key、模型及声线，不共享合成缓存', async () => {
+  const calls = [];
+  const h = tasks({ customSettings: { providers: [
+    { id: 'text', kind: 'text', preset: 'openai', model: 'text-model' },
+    { id: 'speech-a', kind: 'speech', preset: 'gemini-tts', reuseKey: false, apiKey: 'key-a', model: 'gemini-a-tts', voice: 'Kore' },
+    { id: 'speech-b', kind: 'speech', preset: 'gemini-tts', reuseKey: false, apiKey: 'key-b', model: 'gemini-b-tts', voice: 'Puck' },
+  ], ttsProviderId: 'speech-a' } });
+  h.ctx.LT.GeminiTTS.synthesize = async ({ config }) => {
+    calls.push(config);
+    return { bytes: Uint8Array.from([1, 2, 3]), mime: 'audio/mpeg' };
+  };
+  const frozen = h.ctx.LT.Selection.resolve(h.defaults, 'speech-a');
+  h.defaults.providers.find(p => p.id === 'speech-a').voice = 'Charon';
+  assert.equal(frozen.voice, 'Kore');
+  const port = h.port();
+  for (const [index, providerId] of ['speech-a', 'speech-b', 'speech-a'].entries()) {
+    port.receive({ type: 'speak', text: '東京', providerId, requestId: index + 1 });
+    await waitFor(() => h.commands.filter(item => item.command === 'play').length === index + 1, '指定朗读配置应开始播放');
+  }
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(config => [config.provider, config.key, config.model, config.voice]), [
+    ['gemini', 'key-a', 'gemini-a-tts', 'Charon'], ['gemini', 'key-b', 'gemini-b-tts', 'Puck'],
+  ]);
+});
+
+test('朗读与文字翻译拒绝跨类型 ID 及停用配置，错误不进入请求客户端', async () => {
+  const h = tasks({ customSettings: { providers: [
+    { id: 'text', kind: 'text', preset: 'openai', apiKey: 'text-key', model: 'text-model' },
+    { id: 'text-off', kind: 'text', preset: 'openai', enabled: false, apiKey: 'off-key', model: 'text-model' },
+    { id: 'live', kind: 'live', preset: 'gemini-live', apiKey: 'live-key' },
+    { id: 'speech', kind: 'speech', preset: 'microsoft-tts' },
+    { id: 'speech-off', kind: 'speech', preset: 'gemini-tts', enabled: false, reuseKey: false, apiKey: 'speech-key' },
+  ], selectionProviderId: 'text', ttsProviderId: 'speech' } });
+  let calls = 0;
+  h.ctx.LT.MicrosoftTTS.synthesize = h.ctx.LT.GeminiTTS.synthesize = async () => { calls++; throw new Error('不应请求'); };
+  h.ctx.LT.TextModel.resolve = () => { calls++; throw new Error('不应请求'); };
+  const port = h.port();
+  for (const [index, providerId] of ['text', 'live', 'speech-off', 'missing'].entries()) {
+    const requestId = 20 + index;
+    port.receive({ type: 'speak', text: '東京', providerId, requestId });
+    await waitFor(() => port.replies.some(item => item.requestId === requestId && item.phase === 'error'), '无效朗读配置应返回错误');
+  }
+  for (const [index, providerId] of ['speech', 'live', 'text-off'].entries()) {
+    const requestId = 30 + index;
+    port.receive({ type: 'translate', text: '東京', providerId, requestId });
+    await waitFor(() => port.replies.some(item => item.requestId === requestId && item.error), '无效文字配置应返回错误');
+  }
+  assert.equal(calls, 0);
+  assert.equal(h.commands.some(item => item.command === 'play'), false);
+});
+
+test('划词面板按类型列出配置，切换朗读保存并发送供应商 ID', async () => {
+  const nodes = [], sent = [], saved = [];
+  class Node {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.style = {}; this.dataset = {}; this.className = ''; this.value = ''; nodes.push(this); }
+    append(...children) { this.children.push(...children); }
+    setAttribute(name, value) { this.attrs[name] = value; }
+    getAttribute(name) { return this.attrs[name]; }
+    removeAttribute(name) { delete this.attrs[name]; }
+    addEventListener(event, callback) { (this.listeners[event] ||= []).push(callback); }
+    removeEventListener() {}
+    async fire(event) { await Promise.all((this.listeners[event] || []).map(fn => fn({ target: this }))); }
+    get selectedOptions() { return this.children.filter(item => item.value === this.value); }
+    get classList() { return { add: name => { this.className += ` ${name}`; }, remove: name => { this.className = this.className.split(' ').filter(item => item !== name).join(' '); }, contains: name => this.className.split(' ').includes(name) }; }
+    getBoundingClientRect() { return { width: 440, height: 350 }; }
+    attachShadow() { return new Node('shadow'); }
+    focus() {} remove() {}
+  }
+  const port = { postMessage: message => sent.push(message), disconnect() {}, onMessage: { addListener() {} }, onDisconnect: { addListener() {} } };
+  const ctx = context({
+    innerWidth: 1200, innerHeight: 900, setInterval: () => 0, clearInterval() {}, setTimeout: () => 0, clearTimeout() {},
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    CSSStyleSheet: class { replaceSync() {} }, ResizeObserver: class { observe() {} disconnect() {} },
+    document: { createElement: tag => new Node(tag), createElementNS: (_, tag) => new Node(tag), documentElement: new Node('html'), addEventListener() {}, removeEventListener() {} },
+    window: { getSelection: () => null, addEventListener() {}, removeEventListener() {} },
+    chrome: { storage: { onChanged: { addListener() {} } }, runtime: { connect: () => port, onMessage: { addListener() {} } } },
+  });
+  const settings = ctx.LT.Settings.normalize({ providers: [
+    { id: 'text', kind: 'text', preset: 'openai', model: 'text-model' },
+    { id: 'live', kind: 'live', preset: 'gemini-live', apiKey: 'live-key' },
+    { id: 'speech-a', kind: 'speech', preset: 'gemini-tts', name: '朗读 A' },
+    { id: 'speech-b', kind: 'speech', preset: 'gemini-tts', name: '朗读 B' },
+  ], ttsProviderId: 'speech-a' });
+  ctx.LT.Settings.load = async () => settings;
+  ctx.LT.Settings.save = async patch => { saved.push(patch); Object.assign(settings, patch); return settings; };
+  load(ctx, 'src/content/selection.js');
+  await ctx.LT.SelectionUI.open({ text: '東京' });
+  const textSelect = nodes.find(item => item.attrs['aria-label'] === '划词翻译模型');
+  const speechSelect = nodes.find(item => item.attrs['aria-label'] === '朗读接口');
+  assert.deepEqual(textSelect.children.map(item => JSON.parse(item.value)), [['text', 'text-model']]);
+  assert.deepEqual(speechSelect.children.map(item => item.value), ['speech-a', 'speech-b']);
+  speechSelect.value = 'speech-b'; await speechSelect.fire('change');
+  assert.equal(saved[0].ttsProviderId, 'speech-b');
+  assert.equal(saved[0].ttsProvider, undefined);
+  await nodes.find(item => item.attrs['aria-label'] === '朗读原文').fire('click');
+  assert.equal(sent.at(-1).providerId, 'speech-b');
+  assert.equal(sent.at(-1).type, 'speak');
+  ctx.LT.SelectionUI.close();
 });
 test('划词翻译允许只用请求头鉴权，服务错误中的请求头凭据会脱敏', async () => {
   const headers = { 'x-api-key': 'private-header-token' };
@@ -238,7 +339,7 @@ test('无法注入选区 frame 时仍在同一网页顶部 frame 展示，不创
 });
 
 test('设置试听等待保存时切换供应商或停止，不会迟到发起朗读', async () => {
-  for (const action of ['ttsStopPreview','ttsProvider']) {
+  for (const action of ['stop', 'providerChange']) {
     const gate=deferred(); let connections=0;
     const elements=new Map();
     const node=()=>({value:'',disabled:false,textContent:'',listeners:{},
@@ -253,10 +354,13 @@ test('设置试听等待保存时切换供应商或停止，不会迟到发起�
     load(ctx,'src/ui/options-access.js');
     load(ctx,'src/ui/options-tts.js');
     const settings=ctx.LT.Settings.normalize({});
-    ctx.LT.OptionsUI.mountSpeech({$,settings:()=>settings,save:patch=>Object.assign(settings,patch),flush:()=>gate.promise}).bind();
+    const ui=ctx.LT.OptionsUI.mountSpeech({$,settings:()=>settings,save:patch=>Object.assign(settings,patch),flush:()=>gate.promise});
+    ui.bind();
     const preview=$('ttsPreviewJa').listeners.click();
-    $(action).value='gemini';
-    $(action).listeners[action==='ttsProvider'?'change':'click']();
+    if (action === 'providerChange') {
+      settings.ttsProviderId = settings.providers.find(p => p.kind === 'speech' && p.id !== settings.ttsProviderId).id;
+      ui.render();
+    } else $('ttsStopPreview').listeners.click();
     gate.resolve(); await preview;
     assert.equal(connections,0); assert.equal($('ttsPreviewState').textContent,'已停止');
   }

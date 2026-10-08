@@ -1,6 +1,6 @@
 {
   "name": "live-translate-extension",
-  "version": "0.4.5",
+  "version": "0.4.8",
   "private": true,
   "description": "YouTube subtitles, local chat and on-demand text translation, plus Japanese/English reading with Microsoft and Gemini TTS.",
   "license": "SEE LICENSE IN docs/third-party-tts.md",

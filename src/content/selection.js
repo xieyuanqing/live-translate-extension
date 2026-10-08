@@ -181,7 +181,6 @@
     const footer = node('footer');
     const translationProvider = node('select'); translationProvider.setAttribute('aria-label', '划词翻译模型'); translationProvider.disabled = true;
     const provider = node('select'); provider.setAttribute('aria-label', '朗读接口'); provider.disabled = true;
-    for (const [value, label] of [['microsoft', '微软'], ['gemini', 'Gemini']]) { const option = node('option', label); option.value = value; provider.append(option); }
     const footerChoice = (label, select, className) => {
       const wrap = node('label'); wrap.className = `footer-choice ${className}`;
       const selectWrap = node('span'); selectWrap.className = 'select-wrap';
@@ -264,7 +263,7 @@
     const speak = () => {
       if (['preparing', 'playing'].includes(current.speechState)) { post({ type: 'stop' }); setSpeechState('idle'); return; }
       current.speechId = ++sequence; setSpeechState('preparing');
-      post({ type: 'speak', text: message.text, provider: provider.value, rate: current.rate, requestId: current.speechId });
+      post({ type: 'speak', text: message.text, providerId: provider.value, rate: current.rate, requestId: current.speechId });
     };
     const beginTranslation = () => {
       result.textContent = '翻译中…'; result.className = 'result loading'; result.removeAttribute('lang');
@@ -272,7 +271,8 @@
     };
     const translateText = () => {
       current.translationId = ++sequence; beginTranslation();
-      post({ type: 'translate', text: message.text, providerId: translationProvider.value,
+      const [providerId, model] = JSON.parse(translationProvider.value);
+      post({ type: 'translate', text: message.text, providerId, model,
         targetLang: targetLanguage.value, requestId: current.translationId });
     };
     port.onMessage.addListener(value => {
@@ -304,8 +304,8 @@
       current.speechId = ++sequence;
       post({ type: 'stop' }); setSpeechState('idle'); read.disabled = true;
       try {
-        await saveChoice({ ttsProvider: chosen }); current.savedSpeechProvider = chosen;
-        if (session === current && revision === current.speechRevision) showToast(`已切换至${chosen === 'gemini' ? ' Gemini' : '微软'}`);
+        await saveChoice({ ttsProviderId: chosen }); current.savedSpeechProvider = chosen;
+        if (session === current && revision === current.speechRevision) showToast(`已切换至${provider.selectedOptions[0]?.textContent || '所选朗读提供商'}`);
       } catch (_) {
         if (session === current && revision === current.speechRevision) {
           provider.value = current.savedSpeechProvider; showToast('朗读服务保存失败，请重试', 3500);
@@ -315,10 +315,10 @@
       read.disabled = false;
     });
     translationProvider.addEventListener('change', async () => {
-      const chosen = translationProvider.value, revision = ++current.selectionRevision;
+      const chosen = translationProvider.value, [providerId, model] = JSON.parse(chosen), revision = ++current.selectionRevision;
       current.translationId = ++sequence; post({ type: 'cancel-translation' }); beginTranslation();
       try {
-        await saveChoice({ selectionProviderId: chosen }); current.savedTranslationProviderId = chosen;
+        await saveChoice({ selectionProviderId: providerId, selectionModel: model }); current.savedTranslationProviderId = chosen;
         if (session === current && revision === current.selectionRevision) translateText();
       } catch (_) {
         if (session === current) translationProvider.value = current.savedTranslationProviderId;
@@ -350,13 +350,28 @@
     shadow.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
     const settings = await LT.Settings.load();
     if (session !== current) return;
-    for (const item of settings.providers) {
+    for (const item of LT.Settings.providersFor(settings, 'text')) {
+      if (item.enabled === false && item.id !== settings.selectionProviderId) continue;
       const name = item.name || (item.apiType === 'gemini' ? 'Gemini' : 'OpenAI 兼容');
-      const option = node('option', `${name} · ${item.model || '未填写模型名'}`);
-      option.value = item.id; translationProvider.append(option);
+      const models = [...new Set([...(item.models || []), ...(item.id === settings.selectionProviderId ? [settings.selectionModel] : [])])];
+      if (!models.length) models.push('');
+      for (const model of models) {
+        const option = node('option', `${name} · ${model || '未填写模型名'}${item.enabled === false ? '（已停用）' : ''}`);
+        option.disabled = item.enabled === false;
+        option.value = JSON.stringify([item.id, model]); translationProvider.append(option);
+      }
     }
-    translationProvider.value = settings.selectionProviderId; current.savedTranslationProviderId = settings.selectionProviderId;
-    provider.value = settings.ttsProvider; current.savedSpeechProvider = settings.ttsProvider;
+    translationProvider.value = JSON.stringify([settings.selectionProviderId, settings.selectionModel]);
+    current.savedTranslationProviderId = translationProvider.value;
+    for (const item of LT.Settings.providersFor(settings, 'speech')) {
+      if (item.enabled === false && item.id !== settings.ttsProviderId) continue;
+      const name = item.name || (item.preset === 'gemini-tts' ? 'Gemini TTS' : '微软朗读');
+      const option = node('option', `${name}${item.enabled === false ? '（已停用）' : ''}`);
+      option.disabled = item.enabled === false;
+      option.value = item.id; provider.append(option);
+    }
+    provider.value = settings.ttsProviderId; current.savedSpeechProvider = settings.ttsProviderId;
+    if (LT.Settings.serviceProvider(settings, 'speech').enabled === false) showToast('当前朗读提供商已停用，请选择其他提供商', 3500);
     targetLanguage.value = settings.targetLang; current.savedTargetLang = settings.targetLang;
     current.rate = settings.ttsRate;
     applyTheme(settings.uiTheme);

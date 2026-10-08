@@ -23,6 +23,14 @@ function harness() {
 
 const opts = { provider: 'qwen', model: 'qwen-test', videoId: 'video-1', sourceLang: 'ja', targetLang: 'zh', reason: 'test' };
 
+test('统一供应商列表的多 Key 逐个脱敏，包括未选中的直播配置', () => {
+  const h = harness();
+  const settings = { providers: [{ kind: 'live', apiKey: 'private-a, private-b' }, { kind: 'speech', apiKey: 'private-c' }] };
+  const secrets = h.api.secretsFrom(settings);
+  const value = h.api.safe({ detail: 'private-a private-b private-c' }, secrets);
+  assert.equal(value.detail, '[API_KEY] [API_KEY] [API_KEY]');
+});
+
 test('关闭时不保存；基础日志不包含文字，状态里的凭据被去除', async () => {
   const h = harness();
   assert.equal(h.api.open({ ...opts, level: 'off' }, {}), null);

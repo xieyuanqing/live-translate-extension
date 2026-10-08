@@ -164,8 +164,7 @@ globalThis.LT = globalThis.LT || {};
   function contextKey(runSettings, meta, notes) {
     // 包含凭据以便配置改变后作废；只在页面内存比较，绝不传到弹窗或日志。
     // 聊天/评论开关、字幕外观和整片场景不影响本场整理，避免无关操作触发重复模型调用。
-    const contextProvider = (runSettings.providers || []).find(p => p.id === runSettings.liveContextProviderId)
-      || (runSettings.providers || []).find(p => p.id === runSettings.subsProviderId) || runSettings.providers?.[0];
+    const contextProvider = LT.Settings.provider(runSettings, runSettings.liveContextProviderId);
     const config = [runSettings.liveProvider, runSettings.apiKeys, runSettings.baseUrl,
       runSettings.qwenApiKey, runSettings.qwenWorkspaceHost, runSettings.sourceLang, runSettings.targetLang,
       runSettings.useMetadata, runSettings.metadataLimit, runSettings.manualContext, runSettings.generateLiveContext,
@@ -197,7 +196,7 @@ globalThis.LT = globalThis.LT || {};
     if (generatorRequest) {
       const started = Date.now();
       try {
-        const config = LT.TextModel?.resolve?.(runSettings, runSettings.liveContextProviderId);
+        const config = LT.TextModel?.resolve?.(runSettings, runSettings.liveContextProviderId, runSettings.liveContextModel);
         generatorModel = config?.model || '';
         generatorProvider = config?.name || '';
         generated = LT.LiveContext.preserveIdentity(await LT.LiveContext.generate(runSettings, metadataText, userNotes), meta);
@@ -268,6 +267,13 @@ globalThis.LT = globalThis.LT || {};
     const runSettings = await LT.Settings.load();
     if (!isCurrent()) return null;
     settings = runSettings;
+
+    const liveProfile = LT.Settings.serviceProvider(runSettings, 'live');
+    if (liveProfile.enabled === false) {
+      onConnState('error:所选直播提供商已停用，请在设置中启用或选择其他提供商');
+      session.phase = 'idle';
+      return null;
+    }
 
     const liveProvider = runSettings.liveProvider === 'qwen' ? 'qwen' : 'gemini';
     session.debugLog = LT.LiveLog.open({
@@ -601,6 +607,7 @@ globalThis.LT = globalThis.LT || {};
     if (!currentVideoId || currentVideoId === userStoppedFor) return;
     if (currentVideoId === autoStartedFor) return;
     if (!currentMeta || !currentMeta.isLive) return;
+    if (LT.Settings.serviceProvider(settings, 'live').enabled === false) return;
     if (settings.liveProvider === 'qwen' ? !settings.qwenApiKey : LT.Settings.keyList(settings).length === 0) return;
     autoStartedFor = currentVideoId;
     start('自动·直播');

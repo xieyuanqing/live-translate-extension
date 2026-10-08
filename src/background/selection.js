@@ -49,7 +49,7 @@
       settings = await LT.Settings.load();
       if (!valid()) return;
       const text = S.cleanText(message.text);
-      const config = S.resolve(settings, message.provider || settings.ttsProvider);
+      const config = S.resolve(settings, message.providerId || message.provider || settings.ttsProviderId);
       const language = S.language(text);
       run.rate = Math.min(1.25, Math.max(0.75, Number(message.rate) || config.rate));
       // 凭据只用于配置身份的摘要，不放入缓存键或发给内容端。
@@ -87,10 +87,12 @@
       if (controller.signal.aborted) return;
       const text = S.cleanText(message.text);
       const selected = message.providerId || settings.selectionProviderId;
-      if (!settings.providers.some(provider => provider.id === selected)) throw new Error('所选翻译模型已删除，请重新选择');
+      const provider = LT.Settings.providersFor(settings, 'text').find(provider => provider.id === selected);
+      if (!provider) throw new Error('所选翻译模型已删除或类型不匹配，请重新选择');
+      if (provider.enabled === false) throw new Error('所选翻译提供商已停用，请重新选择');
       const targetLang = message.targetLang || settings.targetLang;
       if (!LT.TARGET_LANGS.some(lang => lang.code === targetLang)) throw new Error('目标语言无效，请重新选择');
-      const config = LT.TextModel.resolve(settings, selected);
+      const config = LT.TextModel.resolve(settings, selected, message.model ?? settings.selectionModel);
       if (!LT.TextModel.hasCredentials(config) || !config.model) throw new Error('请先在「接口 → 文字翻译」填写所选接口的 Key 或鉴权请求头，以及模型名');
       if (!await chrome.permissions.contains({ origins: [LT.Settings.hostPattern(config.baseUrl)] })) throw new Error('请先在「接口 → 文字翻译」授权域名');
       config.path = 'direct';
@@ -131,7 +133,12 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes.settings) return;
     const old = LT.Settings.normalize(changes.settings.oldValue), next = LT.Settings.normalize(changes.settings.newValue);
-    if (JSON.stringify(S.resolve(old)) !== JSON.stringify(S.resolve(next))) { cache.clear(); stopSpeech(); }
+    try {
+      if (JSON.stringify(S.resolve(old)) !== JSON.stringify(S.resolve(next))) { cache.clear(); stopSpeech(); }
+    } catch (_) {
+      // 外部导入可能保留已停用的绑定；旧任务仍须停止，不能用旧配置继续播放。
+      cache.clear(); stopSpeech();
+    }
   });
   chrome.tabs.onUpdated.addListener((tabId, changes) => {
     if (!changes.url && changes.status !== 'loading') return;

@@ -137,12 +137,13 @@ test('直播手动隐藏在定时门控及广告结束后仍隐藏，音频采�
     chrome: { runtime: { sendMessage: async () => {}, onMessage: { addListener(fn) { onMessage = fn; } } } },
   });
   load(ctx, 'src/common/constants.js');
+  load(ctx, 'src/common/settings.js');
   load(ctx, 'src/common/prompt.js');
   load(ctx, 'src/common/live-context.js');
   load(ctx, 'src/common/live-log.js');
   const LT = ctx.LT;
-  const settings = { ...LT.DEFAULTS, apiKeys: 'test-only', autoStartLive: false, useMetadata: false, generateLiveContext: false };
-  LT.Settings = { load: async () => settings, pickKey: () => 'test-only', keyList: () => ['test-only'] };
+  const settings = LT.Settings.normalize({ apiKeys: 'test-only', autoStartLive: false, useMetadata: false, generateLiveContext: false });
+  LT.Settings.load = async () => settings;
   LT.CaptionLayer = class {
     mount(p) { this.player = p; this.mounted = true; }
     unmount() { this.mounted = false; }

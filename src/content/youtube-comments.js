@@ -184,7 +184,7 @@
         const controller = new AbortController();
         controllers.add(controller);
         try {
-          const config = LT.TextModel.resolve(snapshot, snapshot.commentProviderId);
+          const config = LT.TextModel.resolve(snapshot, snapshot.commentProviderId, snapshot.commentModel);
           if (!LT.TextModel.hasCredentials(config) || !config.model) throw new Error('请在「聊天与评论」选择接口，并在「接口」配置鉴权和模型名');
           const meta = snapshot.useMetadata ? await LT.YouTube.requestMeta() : null;
           if (!isCurrent(run) || controller.signal.aborted) return;
@@ -257,7 +257,7 @@
     // 复用的多个直播 Key 在请求时随机选；比较完整列表，避免每次读取都误判设置变化。
     const reusedKeys = provider.apiType === 'gemini' && !provider.apiKey ? LT.Settings.keyList(next) : [];
     const nextSignature = JSON.stringify([next.enableCommentTranslation, next.sourceLang, next.targetLang,
-      provider, reusedKeys, next.manualContext, next.useMetadata, next.metadataLimit]);
+      provider, next.commentModel, reusedKeys, next.manualContext, next.useMetadata, next.metadataLimit]);
     if (settings.enableChatTranslation !== next.enableChatTranslation) { chat = null; chatQueryAt = 0; }
     settings = next;
     if (signature !== nextSignature) { signature = nextSignature; reset({ remove: true }); }

@@ -107,22 +107,22 @@ globalThis.LT = globalThis.LT || {};
     ].join('\n');
   }
 
-  function parseComments(text, entries) {
+  function parseComments(text, entries, kind = '评论') {
     const raw = String(text || '');
     const first = raw.indexOf('{');
     const last = raw.lastIndexOf('}');
-    if (first < 0 || last <= first) throw new Error('评论模型没有返回完整 JSON，请重试');
+    if (first < 0 || last <= first) throw new Error(`${kind}模型没有返回完整 JSON，请重试`);
     const value = JSON.parse(raw.slice(first, last + 1));
-    if (!Array.isArray(value.translations)) throw new Error('评论译文格式不完整，请重试');
+    if (!Array.isArray(value.translations)) throw new Error(`${kind}译文格式不完整，请重试`);
     const expected = new Set(entries.map(item => item.id));
     const result = new Map();
     for (const item of value.translations) {
       const id = Number(item?.id);
       const translated = typeof item?.text === 'string' ? item.text.trim() : '';
-      if (!expected.has(id) || result.has(id) || !translated) throw new Error('评论译文编号或内容不完整，请重试');
+      if (!expected.has(id) || result.has(id) || !translated) throw new Error(`${kind}译文编号或内容不完整，请重试`);
       result.set(id, translated);
     }
-    if (result.size !== expected.size) throw new Error('评论模型遗漏了条目，请重试');
+    if (result.size !== expected.size) throw new Error(`${kind}模型遗漏了条目，请重试`);
     return result;
   }
 

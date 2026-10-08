@@ -5,6 +5,15 @@ globalThis.LT = globalThis.LT || {};
   const LT = globalThis.LT;
   const KEY = 'settings';
   const REQUEST_PATHS = ['auto', 'direct', 'relay'];
+  const CONNECTION_FIELDS = ['apiKeys', 'baseUrl', 'liveProvider', 'qwenWorkspaceHost', 'qwenApiKey',
+    'ttsProvider', 'ttsMicrosoftJaVoice', 'ttsMicrosoftEnVoice', 'ttsGeminiApiKey', 'ttsGeminiReuseKey',
+    'ttsGeminiBaseUrl', 'ttsGeminiModel', 'ttsGeminiVoice'];
+  const BINDINGS = { text: ['subsProviderId', 'selectionProviderId', 'commentProviderId', 'liveContextProviderId', 'chatProviderId'],
+    live: ['liveProviderId'], speech: ['ttsProviderId'] };
+  const TEXT_PURPOSES = [
+    ['subsProviderId', 'subsModel'], ['selectionProviderId', 'selectionModel'],
+    ['commentProviderId', 'commentModel'], ['liveContextProviderId', 'liveContextModel'],
+  ];
   // 0.2.0 开发期改过一次字段，旧字段不再读取，顺手从存储里清掉
   const RETIRED = ['textApiType', 'textBaseUrl', 'textApiKey', 'textModel', 'textConcurrency', 'textRequestPath', 'showSource'];
 
@@ -30,20 +39,78 @@ globalThis.LT = globalThis.LT || {};
     return '';
   }
 
-  /** 一套文字模型接口配置的范围收敛；缺 id 时补一个。 */
+  /** 统一提供商配置，按类型保留实际客户端支持的字段。 */
   function normalizeProvider(raw) {
     const p = raw && typeof raw === 'object' ? raw : {};
-    return {
+    const apiType = p.apiType === 'openai' ? 'openai' : 'gemini';
+    const baseUrl = String(p.baseUrl || '').trim().replace(/\/+$/, '');
+    const available = LT.PROVIDER_PRESETS.filter(item => !item.pending);
+    // 旧配置按实际协议和地址识别，无法识别的保留为同协议的自定义提供商。
+    const preset = available.find(item => item.code === p.preset) ||
+      (!p.preset && available.find(item => item.kind === 'text' && item.baseUrl && item.apiType === apiType && item.baseUrl === (baseUrl || LT.TEXT_DEFAULT_BASE[apiType]))) ||
+      available.find(item => item.code === 'custom');
+    const common = {
       id: String(p.id || '').trim() || newProviderId(),
       name: String(p.name || '').trim(),
-      apiType: p.apiType === 'openai' ? 'openai' : 'gemini',
-      baseUrl: String(p.baseUrl || '').trim().replace(/\/+$/, ''),
+      kind: preset.kind,
+      preset: preset.code,
+      enabled: p.enabled !== false,
+      description: String(p.description || '').trim(),
+      baseUrl: baseUrl || preset.baseUrl || '',
       apiKey: String(p.apiKey || '').trim(),
+      model: preset.kind === 'live' ? preset.model : String(p.model || preset.model || '').trim(),
+    };
+    if (preset.kind === 'live') return { ...common,
+      workspaceHost: String(p.workspaceHost || '').trim().replace(/^wss?:\/\//i, '').replace(/\/$/, '') };
+    if (preset.kind === 'speech') return { ...common,
+      reuseKey: p.reuseKey !== false,
+      voice: /^[A-Za-z]{2,30}$/.test(p.voice || '') ? p.voice : 'Kore',
+      jaVoice: /^ja-JP-[A-Za-z]+Neural$/.test(p.jaVoice || '') ? p.jaVoice : LT.DEFAULTS.ttsMicrosoftJaVoice,
+      enVoice: /^en-US-[A-Za-z]+Neural$/.test(p.enVoice || '') ? p.enVoice : LT.DEFAULTS.ttsMicrosoftEnVoice,
+      model: common.model.replace(/^models\//, ''),
+    };
+    return { ...common,
+      apiType: preset.code === 'custom' ? apiType : preset.apiType,
+      models: [...new Set([...(Array.isArray(p.models) ? p.models : []), common.model]
+        .filter(model => typeof model === 'string' && model.trim()).map(model => model.trim().replace(/^models\//, '')))],
       headers: normalizeHeaders(p.headers),
-      model: String(p.model || '').trim(),
       concurrency: clamp(Number(p.concurrency) || 3, 1, 6),
       requestPath: REQUEST_PATHS.includes(p.requestPath) ? p.requestPath : 'auto',
     };
+  }
+
+  function providersFor(settings, kind) {
+    return (settings.providers || []).filter(p => (p.kind || 'text') === kind);
+  }
+
+  function serviceProvider(settings, kind, id) {
+    const selected = id || settings[BINDINGS[kind][0]];
+    const provider = providersFor(settings, kind).find(p => p.id === selected);
+    if (!provider) throw new Error('所选提供商已删除或类型不匹配，请重新选择');
+    return provider;
+  }
+
+  /** 只生成运行快照；存储和备份以统一列表为唯一连接配置来源。 */
+  function projectConnections(s) {
+    const live = serviceProvider(s, 'live');
+    const geminiLive = live.preset === 'gemini-live' ? live : providersFor(s, 'live').find(p => p.preset === 'gemini-live' && p.enabled);
+    const qwenLive = live.preset === 'qwen-live' ? live : providersFor(s, 'live').find(p => p.preset === 'qwen-live');
+    s.liveProvider = live.preset === 'qwen-live' ? 'qwen' : 'gemini';
+    s.apiKeys = geminiLive?.apiKey || '';
+    s.baseUrl = geminiLive?.baseUrl || LT.DEFAULT_BASE_URL;
+    s.qwenApiKey = qwenLive?.apiKey || '';
+    s.qwenWorkspaceHost = qwenLive?.workspaceHost || '';
+    const speech = serviceProvider(s, 'speech');
+    const geminiSpeech = speech.preset === 'gemini-tts' ? speech : providersFor(s, 'speech').find(p => p.preset === 'gemini-tts');
+    const microsoftSpeech = speech.preset === 'microsoft-tts' ? speech : providersFor(s, 'speech').find(p => p.preset === 'microsoft-tts');
+    s.ttsProvider = speech.preset === 'gemini-tts' ? 'gemini' : 'microsoft';
+    s.ttsGeminiApiKey = geminiSpeech?.apiKey || '';
+    s.ttsGeminiReuseKey = geminiSpeech?.reuseKey ?? true;
+    s.ttsGeminiBaseUrl = geminiSpeech?.baseUrl || LT.DEFAULTS.ttsGeminiBaseUrl;
+    s.ttsGeminiModel = geminiSpeech?.model || LT.DEFAULTS.ttsGeminiModel;
+    s.ttsGeminiVoice = geminiSpeech?.voice || LT.DEFAULTS.ttsGeminiVoice;
+    s.ttsMicrosoftJaVoice = microsoftSpeech?.jaVoice || LT.DEFAULTS.ttsMicrosoftJaVoice;
+    s.ttsMicrosoftEnVoice = microsoftSpeech?.enVoice || LT.DEFAULTS.ttsMicrosoftEnVoice;
   }
 
   /** 收敛范围并补齐新增字段，保留现有接口类型和各用途的选择。 */
@@ -94,22 +161,62 @@ globalThis.LT = globalThis.LT || {};
     s.captionSourceColor = color(s.captionSourceColor, LT.DEFAULTS.captionSourceColor);
     s.captionSourceScale = clamp(Number(s.captionSourceScale) || 0.78, 0.6, 1);
     s.subsExtraInstruction = String(s.subsExtraInstruction || '');
-    // 文字模型接口配置：至少一套、id 不重复、选用的那套必须存在
+    // 旧版独立的直播/朗读连接一次性并入列表，后续只读取列表里的配置。
     const ids = new Set();
     s.providers = (Array.isArray(s.providers) ? s.providers : [])
       .filter((p) => p && typeof p === 'object')
       .map((p) => normalizeProvider(p))
       .filter((p) => !ids.has(p.id) && ids.add(p.id));
     if (s.providers.length === 0) s.providers = LT.DEFAULTS.providers.map((p) => normalizeProvider(p));
-    const valid = new Set(s.providers.map((p) => p.id));
-    const first = s.providers[0].id;
-    if (!valid.has(s.subsProviderId)) s.subsProviderId = first;
-    // 新用途首次沿用字幕模型，之后各自独立保存。
-    for (const key of ['selectionProviderId', 'commentProviderId', 'liveContextProviderId']) {
-      if (!s[key]) s[key] = s.subsProviderId;
-      if (!valid.has(s[key])) s[key] = first;
+    const unified = Number(raw?.providerSchema) >= 2 || raw?.providers?.some(p => p?.kind === 'live' || p?.kind === 'speech');
+    const legacy = [
+      { id: 'p-live-gemini', preset: 'gemini-live', name: 'Gemini 直播翻译', apiKey: s.apiKeys, baseUrl: s.baseUrl },
+      { id: 'p-live-qwen', preset: 'qwen-live', name: '千问直播翻译', apiKey: s.qwenApiKey, workspaceHost: s.qwenWorkspaceHost },
+      { id: 'p-speech-microsoft', preset: 'microsoft-tts', name: '微软朗读', jaVoice: s.ttsMicrosoftJaVoice, enVoice: s.ttsMicrosoftEnVoice },
+      { id: 'p-speech-gemini', preset: 'gemini-tts', name: 'Gemini 朗读', apiKey: s.ttsGeminiApiKey, reuseKey: s.ttsGeminiReuseKey,
+        baseUrl: s.ttsGeminiBaseUrl, model: s.ttsGeminiModel, voice: s.ttsGeminiVoice },
+    ];
+    const append = value => {
+      const provider = normalizeProvider(value);
+      if (s.providers.some(p => p.id === provider.id)) provider.id = newProviderId();
+      s.providers.push(provider);
+      return provider.id;
+    };
+    if (!unified) {
+      const migrated = legacy.map(append);
+      s.liveProviderId = migrated[s.liveProvider === 'qwen' ? 1 : 0];
+      s.ttsProviderId = migrated[s.ttsProvider === 'gemini' ? 3 : 2];
     }
+    for (const kind of ['text', 'live', 'speech']) {
+      if (!providersFor(s, kind).length) append(kind === 'text' ? LT.DEFAULTS.providers[0] : legacy[kind === 'live' ? 0 : 2]);
+      const list = providersFor(s, kind);
+      const first = (list.find(p => p.enabled) || list[0]).id;
+      for (const key of BINDINGS[kind]) {
+        if (key === 'chatProviderId' && s.chatProviderId === 'local') continue;
+        if (!s[key] && kind === 'text') s[key] = s.subsProviderId;
+        if (!list.some(p => p.id === s[key])) s[key] = first;
+      }
+    }
+    for (const [providerField, modelField] of TEXT_PURPOSES) {
+      const oldModel = providersFor(s, 'text').find(p => p.id === s[providerField])?.model || '';
+      s[modelField] = String(raw?.providerSchema === 3 ? s[modelField] || '' : oldModel).trim().replace(/^models\//, '');
+    }
+    for (const provider of providersFor(s, 'text')) delete provider.model;
+    if (s.chatProviderId !== 'local') {
+      const chat = providersFor(s, 'text').find(p => p.id === s.chatProviderId);
+      if (!chat) s.chatProviderId = 'local';
+    }
+    s.chatModel = String(s.chatModel || '').trim().replace(/^models\//, '');
+    s.providerSchema = 3;
+    projectConnections(s);
     return s;
+  }
+
+  function persistable(settings) {
+    const copy = normalize(settings);
+    for (const field of CONNECTION_FIELDS) delete copy[field];
+    for (const provider of copy.providers) if (provider.kind === 'text') delete provider.model;
+    return copy;
   }
 
   LT.Settings = {
@@ -117,6 +224,9 @@ globalThis.LT = globalThis.LT || {};
     normalizeProvider,
     normalizeHeaders,
     headerError,
+    providersFor,
+    serviceProvider,
+    persistable,
 
     /** HTTP 接口的 Chrome 主机权限不包含端口；设置授权、后台检查必须使用同一模式。 */
     hostPattern(value) {
@@ -134,7 +244,7 @@ globalThis.LT = globalThis.LT || {};
     async save(patch) {
       const current = await this.load();
       const next = normalize(Object.assign({}, current, patch));
-      await chrome.storage.local.set({ [KEY]: next });
+      await chrome.storage.local.set({ [KEY]: persistable(next) });
       return next;
     },
 
@@ -160,14 +270,17 @@ globalThis.LT = globalThis.LT || {};
 
     /** 新建一套接口配置（带新 id），patch 里的字段覆盖默认值。 */
     newProvider(patch) {
-      return normalizeProvider(Object.assign({ apiType: 'openai' }, patch || {}, { id: newProviderId() }));
+      if (LT.PROVIDER_PRESETS.some(item => item.code === patch?.preset && item.pending)) throw new Error('该提供商尚未接入');
+      const provider = normalizeProvider(Object.assign({ apiType: 'openai' }, patch || {}, { id: newProviderId() }));
+      if (provider.kind === 'text') delete provider.model;
+      return provider;
     },
 
     /** 整片字幕选用的接口配置；传 id 可取指定的一套，找不到就退到第一套。 */
     provider(settings, id) {
-      const list =
-        Array.isArray(settings.providers) && settings.providers.length ? settings.providers : LT.DEFAULTS.providers;
+      const list = providersFor(settings, 'text');
       const want = id || settings.subsProviderId;
+      if (id && !list.some(p => p.id === id)) throw new Error('所选文字提供商已删除或类型不匹配，请重新选择');
       return list.find((p) => p.id === want) || list[0];
     },
   };

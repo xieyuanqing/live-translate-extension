@@ -45,6 +45,58 @@ test('聊天帧只上报状态，弹窗消息可以准备模型，不向聊天�
   assert.equal(created, 1);
 });
 
+test('云端聊天按所选接口和模型分批翻译，切换模型后重新请求', async () => {
+  const timers = [], storageListeners = [], requests = [], statuses = [];
+  const sources = ['次の曲が楽しみです', '今日はありがとう'].map(original => ({ original, isConnected: true, result: null,
+    querySelector() { return this.result; }, append(result) { this.result = result; result.source = this; } }));
+  const rows = sources.map(source => ({ querySelector: () => source }));
+  const ctx = vm.createContext({
+    URL, AbortController, DOMException, JSON,
+    setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
+    location: { pathname: '/live_chat', href: 'https://www.youtube.com/live_chat?v=video-a' },
+    document: { documentElement: {}, querySelector: () => null,
+      querySelectorAll: selector => selector.startsWith('yt-live-chat') ? rows
+        : selector === '.lt-yt-chat-result' ? sources.map(source => source.result).filter(Boolean) : [],
+      createElement: () => ({ dataset: {}, textContent: '', remove() { this.source.result = null; } }) },
+    window: { addEventListener() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    chrome: { runtime: { sendMessage: msg => { statuses.push(msg.payload); return Promise.resolve(); }, onMessage: { addListener() {} } },
+      storage: { onChanged: { addListener: fn => storageListeners.push(fn) } } },
+  });
+  run(ctx, 'src/common/constants.js');
+  let settings = { ...ctx.LT.DEFAULTS, enableChatTranslation: true, chatProviderId: 'deepseek', chatModel: 'Flash',
+    providers: [{ id: 'deepseek', kind: 'text', apiKey: 'test-key', baseUrl: 'https://example.com/v1', models: ['Flash', 'Pro'] }] };
+  ctx.LT.Settings = { load: async () => settings, normalize: value => value,
+    provider: (value, id) => value.providers.find(provider => provider.id === id) };
+  ctx.LT.TextModel = { resolve: (value, id, model) => ({ id, model, baseUrl: value.providers[0].baseUrl }),
+    hasCredentials: () => true,
+    translate: async args => { requests.push(args); const input = JSON.parse(args.user);
+      return { text: JSON.stringify({ translations: input.map(item => ({ id: item.id, text: `译文 ${item.id}` })) }) }; } };
+  ctx.LT.YouTubeText = { readText: source => source.original, visible: () => true, shouldTranslateChat: () => true,
+    ownMutation: () => false, applyResultStyle() {}, showResult: (result, _source, text) => { result.textContent = text; },
+    remember: (cache, key, value) => cache.set(key, value),
+    parseComments: (output, entries) => { const items = JSON.parse(output).translations;
+      assert.deepEqual(Array.from(items, item => item.id), Array.from(entries, item => item.id));
+      return new Map(items.map(item => [item.id, item.text])); } };
+  run(ctx, 'src/content/youtube-chat.js');
+  await flush();
+  assert.equal(statuses.at(-1).phase, 'ready');
+  timers.splice(0).forEach(fn => fn());
+  await flush();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].config.model, 'Flash');
+  assert.deepEqual(JSON.parse(requests[0].user).map(item => item.text), sources.map(source => source.original));
+  assert.equal(sources[0].result.textContent, '译文 1');
+  settings = { ...settings, chatModel: 'Pro' };
+  storageListeners.forEach(fn => fn({ settings: {} }, 'local'));
+  await flush();
+  timers.splice(0).forEach(fn => fn());
+  await flush();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].config.model, 'Pro');
+  assert.equal(sources[1].result.textContent, '译文 2');
+});
+
 class FakeNode {
   constructor() {
     this.listeners = {};

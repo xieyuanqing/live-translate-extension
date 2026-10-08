@@ -23,8 +23,9 @@ globalThis.LT = globalThis.LT || {};
    * 从设置里整理出本次任务用的模型配置；传 providerId 可取指定的一套。
    * Gemini 没单独填 Key 时复用 Live 的 Key；模型名允许带 models/ 前缀，这里去掉。
    */
-  function resolve(settings, providerId) {
+  function resolve(settings, providerId, selectedModel) {
     const p = LT.Settings.provider(settings, providerId);
+    if (p.enabled === false) throw new Error(`提供商「${p.name || p.id}」已停用，请在设置中启用或选择其他提供商`);
     const apiType = p.apiType === 'openai' ? 'openai' : 'gemini';
     const baseUrl = String(p.baseUrl || LT.TEXT_DEFAULT_BASE[apiType]).replace(/\/+$/, '');
     let key = String(p.apiKey || '').trim();
@@ -33,7 +34,7 @@ globalThis.LT = globalThis.LT || {};
       key = LT.Settings.pickKey(settings);
       keySource = 'live';
     }
-    let model = String(p.model || '').trim();
+    let model = String(selectedModel === undefined ? p.model || '' : selectedModel).trim();
     if (apiType === 'gemini') model = model.replace(/^models\//, '');
     return {
       id: p.id,
