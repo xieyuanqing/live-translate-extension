@@ -20,7 +20,7 @@ globalThis.LT = globalThis.LT || {};
     o.value = code;
     select.appendChild(o);
   };
-  const typeLabel = (apiType) => ({ gemini: 'Gemini', openai: 'OpenAI 兼容' })[apiType] || apiType;
+  const typeLabel = (apiType) => ({ gemini: 'Gemini', openai: 'OpenAI 兼容', anthropic: 'Claude' })[apiType] || apiType;
   const textFunctions = [
     ['liveContextProviderId', '直播背景整理'], ['subsProviderId', '整片字幕'],
     ['commentProviderId', '评论翻译'], ['selectionProviderId', '划词翻译'], ['chatProviderId', '聊天弹幕'],
@@ -28,6 +28,53 @@ globalThis.LT = globalThis.LT || {};
   const functionsFor = (provider) => provider.kind === 'live' ? [['liveProviderId', '实时翻译']]
     : provider.kind === 'speech' ? [['ttsProviderId', '语音朗读']] : textFunctions;
   const kindLabel = (provider) => ({ text: '文字模型', live: '实时翻译', speech: '原文朗读' })[provider.kind] || '文字模型';
+  // 「全部」视图按类型分组显示；组内保持用户排序。
+  const KIND_ORDER = ['text', 'live', 'speech'];
+  const MARKS = {
+    gemini: '✦', openai: 'O', deepseek: 'DS', anthropic: '✳', bailian: '阿', 'bailian-intl': '阿', groq: 'g', moonshot: 'M',
+    custom: '≡', 'gemini-live': '✦', 'qwen-live': '千', 'microsoft-tts': 'M', 'gemini-tts': '✦',
+  };
+  const RECOMMENDED_MODELS = {
+    gemini: [
+      ['gemini-2.5-pro', '强推理·字幕纠错'],
+      ['gemini-2.5-flash', '均衡·通用推荐'],
+      ['gemini-2.5-flash-lite', '极速·弹幕/划词'],
+    ],
+    deepseek: [
+      ['deepseek-reasoner', '强推理·字幕纠错'],
+      ['deepseek-chat', '均衡·通用推荐'],
+    ],
+    openai: [
+      ['gpt-4.1', '高精度·字幕纠错'],
+      ['gpt-4.1-mini', '均衡·通用推荐'],
+      ['gpt-4.1-nano', '极速·轻量低延迟'],
+    ],
+    anthropic: [
+      ['claude-sonnet-4-6', '高精度·字幕纠错'],
+      ['claude-haiku-4-5', '快速·日常翻译'],
+    ],
+    bailian: [
+      ['qwen-max', '高精度·字幕纠错'],
+      ['qwen-plus', '均衡·通用推荐'],
+      ['qwen-turbo', '极速·轻量低延迟'],
+    ],
+    'bailian-intl': [
+      ['qwen-max', '高精度·字幕纠错'],
+      ['qwen-plus', '均衡·通用推荐'],
+      ['qwen-turbo', '极速·轻量低延迟'],
+    ],
+    groq: [
+      ['llama-3.3-70b-versatile', '均衡·高速'],
+      ['llama-3.1-8b-instant', '极速·轻量'],
+    ],
+    moonshot: [
+      ['kimi-k2-0711-preview', '高精度·字幕'],
+      ['moonshot-v1-8k', '均衡·短文本'],
+    ],
+  };
+  const providerMark = (preset) => MARKS[preset.code] || preset.label.slice(0, 1);
+  LT.OptionsUI.providerMark = providerMark;
+  const markFor = (provider) => providerMark(LT.PROVIDER_PRESETS.find(preset => preset.code === provider.preset));
   const presetFor = (provider) => LT.PROVIDER_PRESETS.find(preset => preset.code === provider.preset);
   const identityLabel = (provider) => presetFor(provider)?.label || typeLabel(provider.apiType);
   const displayName = (p) => p.name || identityLabel(p);
@@ -144,7 +191,9 @@ globalThis.LT = globalThis.LT || {};
     const box = ctx.box;
     const kindButtons = [...document.querySelectorAll('#providerKindFilters [data-provider-kind]')];
     let editingId = '', activeKind = 'all', accessWidgets = [], draggedId = '';
-    const visibleProviders = (settings) => settings.providers.filter(provider => activeKind === 'all' || provider.kind === activeKind);
+    const visibleProviders = (settings) => activeKind === 'all'
+      ? KIND_ORDER.flatMap(kind => settings.providers.filter(provider => provider.kind === kind))
+      : settings.providers.filter(provider => provider.kind === activeKind);
 
     for (const button of kindButtons) button.addEventListener('click', () => {
       activeKind = button.dataset.providerKind;
@@ -185,22 +234,23 @@ globalThis.LT = globalThis.LT || {};
       return label;
     }
 
+    // 只在同类提供商之间排序，筛选与「全部」分组视图的顺序一致。
+    const peersOf = (settings, provider) => settings.providers.filter(p => p.kind === provider.kind);
+
     function appendOrder(root, provider) {
-      const settings = ctx.settings();
       const orderActions = el('div', 'row provider-order-actions');
       const moveUp = el('button', 'ghost small', '上移');
       const moveDown = el('button', 'ghost small', '下移');
       moveUp.type = moveDown.type = 'button';
-      const visible = visibleProviders(settings);
-      const position = visible.indexOf(provider);
+      const peers = peersOf(ctx.settings(), provider);
+      const position = peers.indexOf(provider);
       moveUp.disabled = position === 0;
-      moveDown.disabled = position === visible.length - 1;
+      moveDown.disabled = position === peers.length - 1;
       const shift = (offset) => {
         const s = ctx.settings();
-        const shown = visibleProviders(s);
-        const current = shown.indexOf(provider);
-        const target = shown[current + offset];
-        if (current < 0 || !target) return;
+        const shown = peersOf(s, provider);
+        const target = shown[shown.indexOf(provider) + offset];
+        if (!target) return;
         const from = s.providers.indexOf(provider), to = s.providers.indexOf(target);
         [s.providers[from], s.providers[to]] = [s.providers[to], s.providers[from]];
         ctx.save();
@@ -212,6 +262,13 @@ globalThis.LT = globalThis.LT || {};
       root.appendChild(orderActions);
     }
 
+    const tip = (text, extraClass = '') => {
+      const node = el('span', `info-tip${extraClass ? ' ' + extraClass : ''}`);
+      node.setAttribute('tabindex', '0');
+      node.setAttribute('data-tip', text);
+      return node;
+    };
+
     function serviceFields(root, provider, fieldLabel) {
       let access = null;
       const field = (key, title, { values, type = 'text', tag = 'input', hint, placeholder, readOnly = false } = {}) => {
@@ -222,8 +279,14 @@ globalThis.LT = globalThis.LT || {};
         if (tag === 'textarea') input.rows = 2;
         input.value = provider[key] || '';
         input.readOnly = readOnly;
-        group.append(fieldLabel(input, key, title), input);
-        if (hint) group.appendChild(el('p', 'muted small', hint));
+        const label = fieldLabel(input, key, title);
+        if (key === 'apiKey') {
+          const noteText = [hint, 'Key 明文保存在本机扩展存储，默认备份不包含 Key。'].filter(Boolean).join(' ');
+          label.appendChild(tip(noteText, 'key-storage-note'));
+        } else if (hint) {
+          label.appendChild(tip(hint));
+        }
+        group.append(label, input);
         if (!readOnly) input.addEventListener(values ? 'change' : 'input', () => {
           provider[key] = input.value;
           ctx.save();
@@ -233,13 +296,12 @@ globalThis.LT = globalThis.LT || {};
         if (type === 'password') {
           const visible = el('input');
           visible.type = 'checkbox';
-          const label = fieldLabel(visible, `show-${key}`, '显示 API Key');
-          label.className = 'check inline';
-          label.replaceChildren(visible, el('span', null, '显示 API Key'));
+          const showLabel = fieldLabel(visible, `show-${key}`, '显示 API Key');
+          showLabel.className = 'check inline';
+          showLabel.replaceChildren(visible, el('span', null, '显示 API Key'));
           visible.addEventListener('change', () => { input.type = visible.checked ? 'text' : 'password'; });
-          group.appendChild(label);
+          group.appendChild(showLabel);
         }
-        if (key === 'apiKey') group.appendChild(el('p', 'muted small key-storage-note', 'Key 明文保存在本机扩展存储。'));
         root.appendChild(group);
         return { group, input };
       };
@@ -261,8 +323,7 @@ globalThis.LT = globalThis.LT || {};
         const model = field('model', '模型', { readOnly: true });
         model.input.value = LT.QWEN_MODEL;
       } else if (provider.preset === 'microsoft-tts') {
-        root.appendChild(el('p', 'muted small', '无需 API Key，选择日语和英语朗读音色即可。'));
-        field('jaVoice', '日语音色', { values: LT.Selection.VOICES.ja });
+        field('jaVoice', '日语音色', { values: LT.Selection.VOICES.ja, hint: '微软接口无需 API Key，选择朗读音色即可。' });
         field('enVoice', '英语音色', { values: LT.Selection.VOICES.en });
       } else if (provider.preset === 'gemini-tts') {
         const reuse = el('input');
@@ -286,17 +347,36 @@ globalThis.LT = globalThis.LT || {};
       ctx.list?.replaceChildren();
       ctx.picker?.replaceChildren();
       const settings = ctx.settings();
+      ctx.list?.setAttribute('data-grouped', String(activeKind === 'all'));
+      for (const button of kindButtons) {
+        const kind = button.dataset.providerKind;
+        button.setAttribute('data-count', String(settings.providers.filter(p => kind === 'all' || p.kind === kind).length));
+      }
+      let previousKind = '';
       for (const provider of visibleProviders(settings)) {
         const meta = subtitle(provider);
         if (ctx.list) {
           const entry = el('div', 'provider-entry');
           entry.setAttribute('data-provider-id', provider.id);
+          entry.setAttribute('data-kind', provider.kind);
+          if (activeKind === 'all' && provider.kind !== previousKind) {
+            const head = el('div', 'provider-group-head');
+            const glyph = el('span', 'kind-glyph');
+            glyph.setAttribute('aria-hidden', 'true');
+            head.append(glyph, el('span', null, kindLabel(provider)),
+              el('span', 'provider-group-count', String(peersOf(settings, provider).length)));
+            entry.appendChild(head);
+          }
+          previousKind = provider.kind;
           const item = el('button', 'provider-list-item');
           item.type = 'button';
           item.draggable = true;
           item.setAttribute('data-provider-id', provider.id);
           item.setAttribute('aria-pressed', String(provider.id === editingId));
           item.setAttribute('data-enabled', String(provider.enabled !== false));
+          const mark = el('span', 'provider-mark', markFor(provider));
+          mark.setAttribute('aria-hidden', 'true');
+          item.appendChild(mark);
           item.appendChild(el('strong', 'provider-name', displayName(provider)));
           item.appendChild(el('span', 'provider-kind', kindLabel(provider)));
           if (meta) item.appendChild(el('span', 'provider-meta muted small', meta));
@@ -307,9 +387,10 @@ globalThis.LT = globalThis.LT || {};
             event.dataTransfer.setData('text/plain', provider.id);
           });
           item.addEventListener('dragend', () => { draggedId = ''; });
-          entry.addEventListener('dragover', event => { if (draggedId && draggedId !== provider.id) event.preventDefault(); });
+          const sameKind = () => ctx.settings().providers.find(p => p.id === draggedId)?.kind === provider.kind;
+          entry.addEventListener('dragover', event => { if (draggedId && draggedId !== provider.id && sameKind()) event.preventDefault(); });
           entry.addEventListener('drop', event => {
-            if (!draggedId) return;
+            if (!draggedId || !sameKind()) return;
             event.preventDefault();
             moveProvider(draggedId, provider.id);
             draggedId = '';
@@ -329,6 +410,7 @@ globalThis.LT = globalThis.LT || {};
     function card(provider) {
       const settings = ctx.settings();
       const root = el('div', 'provider');
+      root.setAttribute('data-kind', provider.kind);
       const fieldLabel = (input, part, text) => {
         input.id = `provider-${encodeURIComponent(provider.id)}-${part}`;
         const label = el('label', 'label', text);
@@ -337,9 +419,41 @@ globalThis.LT = globalThis.LT || {};
       };
 
       // ---- 三类提供商共用名称、描述、启停和排序 ----
+      // 头部用类型色标出这是哪一类，并只读显示正在使用它的功能；分配仍在「功能分配」。
       const editorHeader = el('div', 'provider-editor-header');
-      editorHeader.appendChild(el('strong', 'provider-identity', identityLabel(provider)));
-      const actions = el('div', 'row');
+      const headerMark = el('span', 'provider-editor-mark', markFor(provider));
+      headerMark.setAttribute('aria-hidden', 'true');
+      const headerCopy = el('div', 'provider-editor-copy');
+      const titleLine = el('div', 'provider-editor-title');
+      const customNameBadge = el('span', 'provider-custom-name');
+      const syncCustomName = () => {
+        const hasCustom = Boolean(provider.name && provider.name !== identityLabel(provider));
+        customNameBadge.textContent = hasCustom ? provider.name : '';
+        customNameBadge.hidden = !hasCustom;
+      };
+      syncCustomName();
+      const kindBadge = el('span', 'provider-kind-badge');
+      const kindGlyph = el('span', 'kind-glyph');
+      kindGlyph.setAttribute('aria-hidden', 'true');
+      kindBadge.append(kindGlyph, el('span', null, kindLabel(provider)));
+      titleLine.append(el('strong', 'provider-identity', identityLabel(provider)), customNameBadge, kindBadge);
+      const roles = rolesFor(settings, provider);
+      const usageRow = el('div', 'provider-usage-row');
+      usageRow.append(
+        el('p', 'provider-usage', roles.length ? `正在用于：${roles.join('、')}` : '尚未分配给任何功能'),
+        (() => {
+          const link = el('a', 'provider-assign-link', '去功能分配 →');
+          link.href = '#models';
+          return link;
+        })()
+      );
+      headerCopy.append(titleLine, usageRow);
+      editorHeader.append(headerMark, headerCopy);
+      const sectionTitle = (name, text) => {
+        const node = el('div', 'provider-section-title', text);
+        node.setAttribute('data-section', name);
+        return node;
+      };
       const nameField = el('div', 'field');
       const name = el('input');
       name.type = 'text';
@@ -348,10 +462,11 @@ globalThis.LT = globalThis.LT || {};
       name.value = provider.name;
       name.addEventListener('input', () => {
         provider.name = name.value;
+        syncCustomName();
         ctx.save();
         renderList();
       });
-      nameField.append(fieldLabel(name, 'name', '名称'), name);
+      nameField.append(fieldLabel(name, 'name', '自定义名称'), name);
       const copy = el('button', 'ghost small', '复制');
       copy.type = 'button';
       copy.addEventListener('click', () => {
@@ -390,28 +505,35 @@ globalThis.LT = globalThis.LT || {};
         ctx.save();
         render();
       });
-      editorHeader.appendChild(enableControl(provider, 'provider-editor-enable', 'provider-editor-enable-switch', '启用当前提供商', '启用'));
-      actions.append(copy, del);
+      const topActions = el('div', 'row provider-header-actions');
+      topActions.append(
+        copy,
+        del,
+        enableControl(provider, 'provider-editor-enable', 'provider-editor-enable-switch', '启用当前提供商', '启用')
+      );
+      editorHeader.appendChild(topActions);
       root.append(editorHeader);
       const descriptionField = el('div', 'field');
       const description = el('input');
       description.type = 'text';
       description.value = provider.description || '';
-      description.placeholder = '可选，例如个人账号、备用接口';
+      description.placeholder = '可选，如个人账号、备用接口';
       description.addEventListener('input', () => { provider.description = description.value; ctx.save(); });
-      descriptionField.append(fieldLabel(description, 'description', '描述'), description);
-      const management = el('details', 'provider-management');
-      management.append(el('summary', null, '名称与管理'), nameField, descriptionField, actions);
+      descriptionField.append(fieldLabel(description, 'description', '备注描述'), description);
+      const identityFields = el('div', 'two provider-identity-fields');
+      identityFields.append(nameField, descriptionField);
+      root.appendChild(identityFields);
 
       if (provider.kind !== 'text') {
+        root.appendChild(sectionTitle('connection', provider.kind === 'speech' ? '连接与音色' : '连接'));
         serviceFields(root, provider, fieldLabel);
-        root.appendChild(management);
         appendOrder(root, provider);
         return root;
       }
 
       // 自定义 API 只有一个入口，在配置内选择服务商实际支持的协议。
       let apiTypeSelect = null;
+      root.appendChild(sectionTitle('connection', '连接'));
       if (provider.preset === 'custom') {
         const typeField = el('div', 'field');
         apiTypeSelect = el('select');
@@ -426,14 +548,46 @@ globalThis.LT = globalThis.LT || {};
       const model = el('input');
       model.type = 'text';
       model.placeholder = '手动输入模型 ID';
-      modelField.appendChild(fieldLabel(model, 'add-model', '可用模型'));
+      const modelLabel = fieldLabel(model, 'add-model', '可用模型');
+      modelLabel.appendChild(tip('在此添加该接口支持的模型 ID，之后可在「功能分配」中为各功能独立选用。'));
+      modelField.appendChild(modelLabel);
       const listBtn = el('button', 'small nowrap', '获取模型列表');
       const addModelBtn = el('button', 'small nowrap', '添加模型');
-      modelRow.append(model, addModelBtn);
+      modelRow.append(model, addModelBtn, listBtn);
+      const recommendedBox = el('div', 'provider-recommended');
       const modelList = el('div', 'provider-model-list');
-      const listState = el('p', 'muted small model-list-state', '模型在各功能中独立选择；也可以直接填写模型 ID。');
+      const listState = el('p', 'muted small model-list-state', '');
       listState.setAttribute('role', 'status');
+      const appendModelId = (rawId) => {
+        const id = rawId.trim().replace(/^models\//, '');
+        if (!id) { listState.textContent = '请先填写模型 ID。'; return; }
+        if (!provider.models.includes(id)) {
+          provider.models.push(id);
+          ctx.save(); renderList(); ctx.onCatalogChange?.();
+        }
+        model.value = '';
+        listState.textContent = `已添加 ${id}。在「功能分配」中选择使用。`;
+        renderModels();
+      };
       function renderModels() {
+        recommendedBox.replaceChildren();
+        const recs = RECOMMENDED_MODELS[provider.preset] || [];
+        if (recs.length) {
+          recommendedBox.hidden = false;
+          recommendedBox.appendChild(el('span', 'provider-recommended-label', '推荐：'));
+          for (const [recId, tierNote] of recs) {
+            const added = provider.models.includes(recId);
+            const chip = el('button', 'provider-recommended-chip small', `${added ? '✓ ' : '＋ '}${recId}`);
+            chip.type = 'button';
+            chip.title = tierNote;
+            chip.setAttribute('data-tip', tierNote);
+            chip.disabled = added || provider.enabled === false;
+            chip.addEventListener('click', () => appendModelId(recId));
+            recommendedBox.appendChild(chip);
+          }
+        } else {
+          recommendedBox.hidden = true;
+        }
         modelList.replaceChildren();
         for (const id of provider.models) {
           const row = el('div', 'provider-model-row');
@@ -452,33 +606,21 @@ globalThis.LT = globalThis.LT || {};
           modelList.appendChild(row);
         }
       }
-      const addModel = () => {
-        const id = model.value.trim().replace(/^models\//, '');
-        if (!id) { listState.textContent = '请先填写模型 ID。'; return; }
-        if (!provider.models.includes(id)) {
-          provider.models.push(id);
-          ctx.save(); renderList(); ctx.onCatalogChange?.();
-        }
-        model.value = '';
-        listState.textContent = `已添加 ${id}。在「功能分配」中选择使用。`;
-        renderModels();
-      };
+      const addModel = () => appendModelId(model.value);
       addModelBtn.addEventListener('click', addModel);
       model.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addModel(); } });
       renderModels();
-      modelField.append(modelList, modelRow, listBtn, listState);
+      modelField.append(recommendedBox, modelList, modelRow, listState);
 
       // ---- 地址 ----
       const baseField = el('div', 'field');
       const base = el('input');
       base.type = 'text';
       base.value = provider.baseUrl;
-      const baseHint = el('p', 'muted small');
-      const baseDetails = el('details', 'field-help');
-      baseDetails.appendChild(el('summary', null, '地址填写规则'));
-      const baseExplanation = el('p', 'muted small');
-      baseDetails.appendChild(baseExplanation);
-      baseField.append(fieldLabel(base, 'base', 'Base URL'), base, baseHint, baseDetails);
+      const baseLabel = fieldLabel(base, 'base', 'Base URL');
+      const baseTip = tip('');
+      baseLabel.appendChild(baseTip);
+      baseField.append(baseLabel, base);
       const accessBox = el('div');
       baseField.appendChild(accessBox);
       const access = LT.OptionsUI.mountHostAccess({ container: accessBox, getUrl: () => provider.baseUrl || LT.TEXT_DEFAULT_BASE[provider.apiType] });
@@ -488,6 +630,9 @@ globalThis.LT = globalThis.LT || {};
       const keyField = el('div', 'field');
       const key = el('input');
       const keyLabel = fieldLabel(key, 'key', 'API Key');
+      const keyLabelText = el('span', null, 'API Key');
+      const keyStorageNote = tip('Key 明文保存在本机扩展存储，默认导出备份不包含 Key。', 'key-storage-note');
+      keyLabel.replaceChildren(keyLabelText, keyStorageNote);
       key.type = 'password';
       key.placeholder = 'sk-... 或 AIza...';
       key.value = provider.apiKey;
@@ -502,18 +647,17 @@ globalThis.LT = globalThis.LT || {};
       showKeyLabel.className = 'check inline';
       showKey.addEventListener('change', () => { key.type = showKey.checked ? 'text' : 'password'; });
       showKeyLabel.replaceChildren(showKey, el('span', null, '显示 API Key'));
-      keyField.append(keyLabel, key, showKeyLabel, el('p', 'muted small key-storage-note', 'Key 明文保存在本机扩展存储。'));
+      keyField.append(keyLabel, key, showKeyLabel);
       root.appendChild(keyField);
       root.appendChild(baseField);
-      root.appendChild(modelField);
 
       // ---- 地址查询不生成文字；每个模型单独测试实际生成。 ----
-      const testRow = el('div', 'row');
+      const testRow = el('div', 'row provider-probe');
       const test = el('button', 'small', '查询接口');
       const testState = el('span', 'muted small test-state');
-      testRow.append(test, testState);
+      testRow.append(test, tip('查询连通性不消耗生成额度；点击下方模型行的「测试」会消耗少量额度。'), testState);
       root.appendChild(testRow);
-      root.appendChild(el('p', 'muted small', '查询不消耗生成额度；测试模型会消耗少量额度。'));
+      root.appendChild(modelField);
 
       // ---- 自定义请求头与高级网络参数 ----
       const headerDetails = el('details', 'custom-headers');
@@ -558,9 +702,8 @@ globalThis.LT = globalThis.LT || {};
       });
       renderHeaders();
       const headerActions = el('div', 'row');
-      headerActions.append(addHeader, showHeaders);
-      headerDetails.append(headerSummary, el('p', 'muted small', '用于需要额外鉴权或参数的文字接口。同名项覆盖默认请求头，也可只用请求头鉴权。'),
-        headerRows, headerActions, headerState, el('p', 'muted small', '请求头与 Key 一样明文保存在本机，默认备份不包含这些值。'));
+      headerActions.append(addHeader, showHeaders, tip('用于需要额外鉴权或参数的文字接口，同名项覆盖默认请求头。请求头明文保存在本机，默认备份不包含。'));
+      headerDetails.append(headerSummary, headerRows, headerActions, headerState);
       root.appendChild(headerDetails);
       const adv = el('details', 'advanced');
       adv.appendChild(el('summary', null, '高级：并发与请求路径'));
@@ -568,13 +711,16 @@ globalThis.LT = globalThis.LT || {};
       const concField = el('div', 'field');
       const conc = el('input');
       const concLabel = fieldLabel(conc, 'concurrency', '并发请求数');
+      const concText = el('span', null, '');
+      const concTip = tip('受接口每分钟额度限制，遇到限流会自动等待。');
+      concLabel.replaceChildren(concText, concTip);
       conc.type = 'range';
       conc.min = '1';
       conc.max = '6';
       conc.step = '1';
       conc.value = String(provider.concurrency);
       const syncConc = () => {
-        concLabel.textContent = `并发请求数：${provider.concurrency}`;
+        concText.textContent = `并发请求数：${provider.concurrency}`;
       };
       syncConc();
       conc.addEventListener('input', () => {
@@ -582,10 +728,12 @@ globalThis.LT = globalThis.LT || {};
         syncConc();
         ctx.save();
       });
-      concField.append(concLabel, conc, el('p', 'muted small', '受接口每分钟额度限制，遇到限流会自动等待。'));
+      concField.append(concLabel, conc);
       const pathField = el('div', 'field');
       const pathSel = el('select');
-      pathField.appendChild(fieldLabel(pathSel, 'path', '请求路径'));
+      const pathLabel = fieldLabel(pathSel, 'path', '请求路径');
+      pathLabel.appendChild(tip('官方接口页面直连即可；第三方地址跨域被拒时会改走扩展后台。'));
+      pathField.appendChild(pathLabel);
       for (const t of LT.TEXT_REQUEST_PATHS) option(pathSel, t.code, t.label);
       pathSel.value = provider.requestPath;
       pathSel.addEventListener('change', () => {
@@ -593,7 +741,7 @@ globalThis.LT = globalThis.LT || {};
         invalidate();
         ctx.save();
       });
-      pathField.append(pathSel, el('p', 'muted small', '官方接口页面直连即可；第三方地址跨域被拒时会改走扩展后台。'));
+      pathField.append(pathSel);
       advTwo.append(concField, pathField);
       adv.append(advTwo);
       root.appendChild(adv);
@@ -601,11 +749,13 @@ globalThis.LT = globalThis.LT || {};
       // ---- 按固定协议说明地址填写方式 ----
       const refreshHints = () => {
         base.placeholder = presetFor(provider)?.baseUrl || LT.TEXT_DEFAULT_BASE[provider.apiType];
-        baseHint.textContent = '可按服务商要求修改基础地址。';
-        baseExplanation.textContent = provider.apiType === 'openai'
-          ? '填写接口基础地址，通常以 /v1 结尾；程序会追加 /chat/completions。第三方接口按其提供的基础地址填写。'
-          : '自建反代填到域名为止，程序会追加 /v1beta/models/… 路径。';
-        keyLabel.textContent = provider.apiType === 'gemini' ? 'API Key（留空复用 Gemini 直播 Key）' : 'API Key';
+        baseTip.setAttribute('data-tip', {
+          openai: '填写接口基础地址（通常以 /v1 结尾），程序会自动追加 /chat/completions。',
+          anthropic: '填到域名为止（不含 /v1），程序会自动追加 /v1/messages 和 /v1/models。',
+          gemini: '自建反代填到域名为止，程序会自动追加 /v1beta/models/… 路径。',
+        }[provider.apiType]);
+        keyLabelText.textContent = provider.apiType === 'gemini' ? 'API Key（留空复用 Gemini 直播 Key）' : 'API Key';
+        key.placeholder = { openai: 'sk-...', anthropic: 'sk-ant-...', gemini: 'AIza...' }[provider.apiType];
         name.placeholder = identityLabel(provider);
         access.refresh();
       };
@@ -614,6 +764,7 @@ globalThis.LT = globalThis.LT || {};
         invalidate(true);
         ctx.save();
         refreshHints();
+        renderModels();
         renderList();
       });
       base.addEventListener('input', () => {
@@ -702,7 +853,6 @@ globalThis.LT = globalThis.LT || {};
       busy(false);
 
       // 列表可拖拽；按钮提供同等的键盘排序操作，所有用途仍绑定原 id。
-      root.appendChild(management);
       appendOrder(root, provider);
 
       return root;

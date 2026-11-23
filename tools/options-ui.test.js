@@ -169,6 +169,25 @@ test('按接口类型筛选仅改变列表，跨分类编辑会定位目标接�
   assert.equal(h.saves(), 0);
 });
 
+test('「全部」按文字 / 实时 / 朗读分组，后加的文字接口排进文字组；排序不跨类型', () => {
+  const h = harness();
+  const claude = h.LT.Settings.newProvider({ preset: 'anthropic', kind: 'text', apiType: 'anthropic', name: 'Claude' });
+  h.settings.providers.push(claude);
+  h.ui.render(claude.id);
+  const kinds = h.list.children.map(node => node.attrs['data-kind']);
+  const order = ['text', 'live', 'speech'];
+  assert.deepEqual(kinds, [...kinds].sort((a, b) => order.indexOf(a) - order.indexOf(b)));
+  assert.equal(h.list.children.filter(node => node.byClass('provider-group-head').length).length, 3);
+  assert.equal(h.kindButtons.text.attrs['data-count'], '3');
+  assert.equal(h.kindButtons.all.attrs['data-count'], String(h.settings.providers.length));
+  // Claude 是文字组最后一个：不能下移到实时翻译组；上移只和文字接口交换。
+  assert.equal(h.cards()[0].byText('下移').disabled, true);
+  h.cards()[0].byText('上移').fire('click');
+  const textIds = h.settings.providers.filter(p => p.kind === 'text').map(p => p.id);
+  assert.deepEqual(textIds, ['g', claude.id, 'o']);
+  assert.match(h.cards()[0].byClass('provider-usage')[0].textContent, /尚未分配/);
+});
+
 test('同一接口添加多个模型；切换编辑的接口不会改变各功能选用', () => {
   const h = harness();
   h.edit('o');
@@ -903,4 +922,106 @@ test('实际导入旧备份首次评论沿用字幕接口，之后字幕选择�
   const afterSelectionChange = h.LT.Settings.normalize({ ...imported, subsProviderId: 'a' });
   assert.equal(afterSelectionChange.subsProviderId, 'a');
   assert.equal(afterSelectionChange.commentProviderId, 'b');
+});
+
+test('预设提供商展示分层推荐模型胶囊并可一键加入，字幕页合并为单个通用提示词', () => {
+  const h = harness();
+  h.edit('g');
+  const card = h.cards()[0];
+  const assignLink = card.byClass('provider-assign-link')[0];
+  assert.ok(assignLink);
+  assert.equal(assignLink.href, '#models');
+
+  const chips = card.byClass('provider-recommended-chip');
+  assert.ok(chips.length >= 2);
+  const firstChip = chips[0];
+  assert.equal(firstChip.disabled, false);
+  firstChip.fire('click');
+  assert.equal(h.settings.providers[0].models.includes('gemini-2.5-pro'), true);
+  assert.equal(h.cards()[0].byClass('provider-recommended-chip')[0].disabled, true);
+
+  h.edit('o');
+  assert.equal(h.cards()[0].byClass('provider-recommended-chip').length, 0);
+
+  const html = fs.readFileSync(path.join(ROOT, 'src/ui/options.html'), 'utf8');
+  assert.match(html, /class="purpose-tier-guide"/);
+  assert.match(html, /id="purposeAddProvider"/);
+  assert.match(html, /id="subsPrompt"/);
+  assert.match(html, /id="resetSubsPrompt"/);
+  assert.doesNotMatch(html, /id="scenes"|id="sceneSelect"/);
+
+  const livePage = html.match(/<section class="page" data-page="live">([\s\S]*?)<\/section>\s*<section class="page" data-page="video">/)?.[1] || '';
+  const videoPage = html.match(/<section class="page" data-page="video">([\s\S]*?)<\/section>\s*<section class="page" data-page="text">/)?.[1] || '';
+  const aboutPage = html.match(/<section class="page" data-page="about">([\s\S]*?)<\/main>/)?.[1] || '';
+  assert.match(livePage, /id="geminiPromptPreview"/);
+  assert.match(videoPage, /id="subsPromptPreview"/);
+  assert.match(videoPage, /id="previewSubs"/);
+  assert.doesNotMatch(aboutPage, /id="geminiPromptPreview"|id="previewSubs"/);
+});
+
+test('前端主结构分为直播实时翻译、视频翻译与其它功能；VPS 令牌在导出/导入/恢复默认中受保护', async () => {
+  const optionsHtml = fs.readFileSync(path.join(ROOT, 'src/ui/options.html'), 'utf8');
+  const nav = optionsHtml.match(/<nav class="nav"[\s\S]*?<\/nav>/)?.[0] || '';
+  const idxCore = nav.indexOf('核心翻译');
+  const idxLive = nav.indexOf('直播实时翻译');
+  const idxVideo = nav.indexOf('视频翻译');
+  const idxOther = nav.indexOf('其它功能');
+  const idxCommon = nav.indexOf('通用与设置');
+  assert.ok(idxCore > 0 && idxCore < idxLive && idxLive < idxVideo && idxVideo < idxOther && idxOther < idxCommon, '侧栏分组顺序应为核心翻译(直播→视频)→其它功能→通用与设置');
+
+  for (const id of ['videoStep1Card', 'videoStep2Card', 'videoTranscriptModes', 'videoAsrBaseUrl', 'videoAsrHostAccess', 'videoAsrToken', 'videoAsrModel', 'videoAsrSendContext', 'videoAsrTest']) {
+    assert.match(optionsHtml, new RegExp(`id="${id}"`), `视频翻译页缺少 ${id}`);
+  }
+  assert.match(optionsHtml, /<select id="videoAsrModel">/, '后端转写模型应为下拉选择器');
+  assert.match(optionsHtml, /id="videoAsrModelDesc"/);
+  assert.match(optionsHtml, /id="videoAsrTestState" class="asr-live-state" data-state="idle"/);
+  assert.match(optionsHtml, /GET \/api\/models/);
+  const scriptIndex = name => optionsHtml.indexOf(`<script src="${name}"></script>`);
+  assert.ok(scriptIndex('../subs/text-model.js') > 0 && scriptIndex('../subs/vps-asr.js') > scriptIndex('../subs/text-model.js')
+    && scriptIndex('options.js') > scriptIndex('../subs/vps-asr.js'), 'vps-asr.js 应在 text-model.js 之后、options.js 之前加载');
+
+  const popupHtml = fs.readFileSync(path.join(ROOT, 'src/ui/popup.html'), 'utf8');
+  for (const id of ['homeOverview', 'homeOpenLive', 'homeOpenVideo', 'liveCard', 'vsBox', 'vsSourceRow', 'vsSourcePill', 'vsAsrModel', 'otherSectionLabel']) {
+    assert.match(popupHtml, new RegExp(`id="${id}"`), `弹窗缺少 ${id}`);
+  }
+
+  const LT = dataHarness();
+  const current = LT.Settings.normalize({
+    videoTranscriptMode: 'vps',
+    videoAsrBaseUrl: 'https://asr.example.com/',
+    videoAsrToken: 'secret-vps-token',
+    videoAsrModel: 'scribe_v2',
+    videoAsrSendContext: false,
+  });
+  assert.equal(current.videoAsrBaseUrl, 'https://asr.example.com');
+  const stripped = LT.OptionsUI.exportObject(current, false, 'test');
+  assert.equal(stripped.settings.videoAsrToken, '');
+  assert.equal(stripped.settings.videoAsrBaseUrl, 'https://asr.example.com');
+  const imported = LT.OptionsUI.importObject(stripped, current);
+  assert.equal(imported.videoAsrToken, 'secret-vps-token');
+  const withKeys = LT.OptionsUI.exportObject(current, true, 'test');
+  assert.equal(withKeys.settings.videoAsrToken, 'secret-vps-token');
+
+  const h = mountedDataHarness({
+    videoTranscriptMode: 'vps',
+    videoAsrBaseUrl: 'https://asr.example.com',
+    videoAsrToken: 'keep-me-token',
+    videoAsrModel: 'whisper-1',
+    videoAsrModels: [{ id: 'whisper-1', label: 'Whisper 1', provider: 'OpenAI', description: '示例' }],
+    videoAsrSendContext: false,
+  });
+  h.$('keepKeys').checked = true;
+  await h.fire('resetSettings', 'click');
+  const kept = h.replacements[0];
+  assert.equal(kept.videoTranscriptMode, 'vps');
+  assert.equal(kept.videoAsrBaseUrl, 'https://asr.example.com');
+  assert.equal(kept.videoAsrToken, 'keep-me-token');
+  assert.equal(kept.videoAsrModel, 'whisper-1');
+  assert.deepEqual(JSON.parse(JSON.stringify(kept.videoAsrModels)), [{ id: 'whisper-1', label: 'Whisper 1', provider: 'OpenAI', description: '示例' }]);
+  assert.equal(kept.videoAsrSendContext, false);
+
+  const h2 = mountedDataHarness({ videoAsrModels: [{ id: 'whisper-1', label: 'Whisper 1' }] });
+  h2.$('keepKeys').checked = false;
+  await h2.fire('resetSettings', 'click');
+  assert.deepEqual(JSON.parse(JSON.stringify(h2.replacements[0].videoAsrModels)), [], '不保留接口时模型清单一并清空');
 });

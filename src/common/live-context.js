@@ -95,5 +95,101 @@ globalThis.LT = globalThis.LT || {};
     }
   }
 
-  LT.LiveContext = { generate, timeoutMs, parse, asPromptContext, buildRequest, preserveIdentity, translationConfig };
+  const CACHE_STORAGE_KEY = 'ltLiveContextCache';
+  const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const CACHE_MAX_ENTRIES = 30;
+
+  function hashString(text) {
+    let h1 = 0x811c9dc5;
+    let h2 = 0x9e3779b1;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ code, 0x01000193);
+      h2 = Math.imul(h2 ^ code, 0x85ebca6b);
+    }
+    return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+  }
+
+  /** 只用非密钥语义输入构造缓存键：同一视频刷新或重开直接复用，改语言/背景/模型/标题时自动失效。 */
+  function cacheKey({ videoId, settings, metadataText = '', notes = '', model = '' }) {
+    const id = String(videoId || '').trim();
+    if (!id) return '';
+    const payload = JSON.stringify([
+      'v1',
+      id,
+      settings?.sourceLang || '',
+      settings?.targetLang || '',
+      String(model || ''),
+      String(metadataText || ''),
+      String(notes || ''),
+    ]);
+    return `${id}:${hashString(payload)}`;
+  }
+
+  function storageArea() {
+    return typeof chrome !== 'undefined' && chrome?.storage?.local ? chrome.storage.local : null;
+  }
+
+  async function getCached(key) {
+    const area = storageArea();
+    if (!key || !area) return null;
+    try {
+      const raw = await area.get(CACHE_STORAGE_KEY);
+      const map = raw && typeof raw[CACHE_STORAGE_KEY] === 'object' ? raw[CACHE_STORAGE_KEY] : null;
+      const entry = map && map[key];
+      if (!entry || !entry.generated) return null;
+      if (!Number.isFinite(entry.savedAt) || Date.now() - entry.savedAt > CACHE_TTL_MS) return null;
+      const bg = clean(entry.generated.background, 240);
+      const phrases = entry.generated.phrases && typeof entry.generated.phrases === 'object' ? entry.generated.phrases : {};
+      if (!bg && !Object.keys(phrases).length) return null;
+      return {
+        generated: { background: bg, phrases: { ...phrases } },
+        generatorModel: String(entry.generatorModel || ''),
+        generatorProvider: String(entry.generatorProvider || ''),
+        savedAt: entry.savedAt,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function setCached(key, entry) {
+    const area = storageArea();
+    if (!key || !entry?.generated || !area) return;
+    try {
+      const now = Date.now();
+      const raw = await area.get(CACHE_STORAGE_KEY);
+      const map = raw && typeof raw[CACHE_STORAGE_KEY] === 'object' ? { ...raw[CACHE_STORAGE_KEY] } : {};
+      for (const [k, v] of Object.entries(map)) {
+        if (!v || !Number.isFinite(v.savedAt) || now - v.savedAt > CACHE_TTL_MS) delete map[k];
+      }
+      map[key] = {
+        generated: {
+          background: clean(entry.generated.background, 240),
+          phrases: { ...(entry.generated.phrases || {}) },
+        },
+        generatorModel: String(entry.generatorModel || ''),
+        generatorProvider: String(entry.generatorProvider || ''),
+        savedAt: now,
+      };
+      const entries = Object.entries(map).sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0));
+      const trimmed = Object.fromEntries(entries.slice(0, CACHE_MAX_ENTRIES));
+      await area.set({ [CACHE_STORAGE_KEY]: trimmed });
+    } catch (_) {
+      /* 缓存写入失败不影响正常开播翻译 */
+    }
+  }
+
+  LT.LiveContext = {
+    generate,
+    timeoutMs,
+    parse,
+    asPromptContext,
+    buildRequest,
+    preserveIdentity,
+    translationConfig,
+    cacheKey,
+    getCached,
+    setCached,
+  };
 })();

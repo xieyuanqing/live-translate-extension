@@ -14,7 +14,7 @@ const deferred = () => {
 };
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 
-async function sessionHarness({ realSettings = false } = {}) {
+async function sessionHarness({ realSettings = false, storage = null } = {}) {
   const video = { paused: false, muted: false, volume: 1 };
   const player = {};
   const clients = [], taps = [], statuses = [], subStarts = [], logs = [];
@@ -22,10 +22,13 @@ async function sessionHarness({ realSettings = false } = {}) {
   let videoId = 'video-A';
   const ctx = vm.createContext({ console: quiet, Date, setInterval() {},
     window: { addEventListener() {} },
-    chrome: { runtime: {
-      sendMessage: async (msg) => statuses.push(msg.payload),
-      onMessage: { addListener(fn) { messageHandler = fn; } },
-    } },
+    chrome: {
+      ...(storage ? { storage } : {}),
+      runtime: {
+        sendMessage: async (msg) => statuses.push(msg.payload),
+        onMessage: { addListener(fn) { messageHandler = fn; } },
+      },
+    },
   });
   load(ctx, 'src/common/constants.js');
   load(ctx, 'src/common/settings.js');
@@ -320,6 +323,71 @@ test('预览输出遮盖配置 Key，换视频后旧生成结果不能写回', a
   let response;
   h.message(h.LT.MSG.QUERY_LIVE_CONTEXT, undefined, x => { response = x; });
   assert.equal(response.review, null);
+});
+
+test('同一场直播刷新页面或重开直接复用已整理的背景缓存，不重复等待', async () => {
+  const store = new Map();
+  const storage = {
+    local: {
+      async get(key) { return store.has(key) ? { [key]: JSON.parse(JSON.stringify(store.get(key))) } : {}; },
+      async set(obj) { for (const [k, v] of Object.entries(obj)) store.set(k, JSON.parse(JSON.stringify(v))); },
+    },
+  };
+  let requests = 0;
+  const h1 = await sessionHarness({ storage });
+  h1.setSettings({ useMetadata: true });
+  h1.LT.YouTube.waitForMeta = async () => ({ videoId: 'live-X', author: 'YuNi', title: '深夜歌回' });
+  h1.navigate('live-X'); await flush();
+  h1.LT.LiveContext.generate = async () => { requests++; return { background: '深夜歌回直播', phrases: { ゆに: 'YuNi' } }; };
+  await h1.LT.debug.start('first');
+  assert.equal(requests, 1);
+  assert.match(h1.clients[0].opts.prompt, /深夜歌回直播/);
+
+  // 模拟刷新页面：全新内容脚本实例共享同一 chrome.storage.local
+  const h2 = await sessionHarness({ storage });
+  const captionStatuses = [];
+  h2.LT.CaptionLayer.prototype.setStatus = (t) => captionStatuses.push(t);
+  h2.setSettings({ useMetadata: true });
+  h2.LT.YouTube.waitForMeta = async () => ({ videoId: 'live-X', author: 'YuNi', title: '深夜歌回' });
+  h2.navigate('live-X'); await flush();
+  h2.LT.LiveContext.generate = async () => { requests++; return { background: '不应重复调用', phrases: {} }; };
+  await h2.LT.debug.start('after-refresh');
+  assert.equal(requests, 1, '刷新同一场直播不得重新调用整理模型');
+  assert.match(h2.clients[0].opts.prompt, /深夜歌回直播/);
+  assert.equal(captionStatuses.some(s => /最多等待/.test(s)), false);
+
+  // 手动点「AI 提炼背景与术语」强制重新整理并更新缓存
+  await h2.LT.debug.stop();
+  h2.LT.LiveContext.generate = async () => { requests++; return { background: '手动刷新后的背景', phrases: {} }; };
+  await h2.LT.debug.previewLiveContext();
+  assert.equal(requests, 2);
+});
+
+test('开播整理失败不会写入缓存，刷新后可以正常重试', async () => {
+  const store = new Map();
+  const storage = {
+    local: {
+      async get(key) { return store.has(key) ? { [key]: JSON.parse(JSON.stringify(store.get(key))) } : {}; },
+      async set(obj) { for (const [k, v] of Object.entries(obj)) store.set(k, JSON.parse(JSON.stringify(v))); },
+    },
+  };
+  let requests = 0;
+  const h1 = await sessionHarness({ storage });
+  h1.setSettings({ useMetadata: true });
+  h1.LT.YouTube.waitForMeta = async () => ({ videoId: 'live-err', title: '测试直播' });
+  h1.navigate('live-err'); await flush();
+  h1.LT.LiveContext.generate = async () => { requests++; throw new Error('超时'); };
+  await h1.LT.debug.start('first');
+  assert.equal(requests, 1);
+
+  const h2 = await sessionHarness({ storage });
+  h2.setSettings({ useMetadata: true });
+  h2.LT.YouTube.waitForMeta = async () => ({ videoId: 'live-err', title: '测试直播' });
+  h2.navigate('live-err'); await flush();
+  h2.LT.LiveContext.generate = async () => { requests++; return { background: '重试成功', phrases: {} }; };
+  await h2.LT.debug.start('retry');
+  assert.equal(requests, 2);
+  assert.match(h2.clients[0].opts.prompt, /重试成功/);
 });
 
 test('没有 API Key 时角标收到最终空闲状态', async () => {

@@ -16,6 +16,7 @@
   let chatPreparing = false;
   let chatPrepareController = null;
   let chatPrepareMessage = '';
+  let vsModelKey = '';
 
   const CONN_LABEL = {
     '': '未开始',
@@ -71,14 +72,81 @@
     return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
   }
 
-  function banner(text, kind) {
+  let bannerClickable = false;
+  function banner(text, kind, clickable = false) {
     const el = $('banner');
+    bannerClickable = !!text && !!clickable;
     el.classList.toggle('hidden', !text);
     el.classList.toggle('info', kind === 'info');
+    el.classList.toggle('clickable', bannerClickable);
     el.textContent = text || '';
   }
 
-  // ---------- 整片字幕区块 ----------
+  // ---------- 视频翻译区块 ----------
+
+  const asrModels = () => (Array.isArray(settings.videoAsrModels) ? settings.videoAsrModels : []);
+
+  function asrModelLabel() {
+    const id = settings.videoAsrModel || '';
+    return id ? asrModels().find(m => m.id === id)?.label || id : '后端默认';
+  }
+
+  /** 已同步模型清单且会走 VPS 时，弹窗里提供快捷切换。 */
+  function canPickAsrModel() {
+    return settings.videoTranscriptMode !== 'youtube' && Boolean(String(settings.videoAsrBaseUrl || '').trim()) && asrModels().length > 0;
+  }
+
+  function describeVideoSource(withModel = true) {
+    const mode = settings.videoTranscriptMode || 'auto';
+    const hasUrl = Boolean(String(settings.videoAsrBaseUrl || '').trim());
+    const model = withModel ? ` · ${asrModelLabel()}` : '';
+    if (mode === 'youtube') return { text: '原文：仅 YouTube 字幕轨', tone: 'neutral' };
+    if (mode === 'vps') {
+      return hasUrl
+        ? { text: `原文：强制 VPS 转写${model}`, tone: 'ok' }
+        : { text: '原文：VPS 未配置地址', tone: 'warn' };
+    }
+    return hasUrl
+      ? { text: `原文：智能优先 · VPS${model}`, tone: 'ok' }
+      : { text: '原文：智能优先 · 暂用字幕轨', tone: 'neutral' };
+  }
+
+  function renderAsrModelSelect(show) {
+    const select = $('vsAsrModel');
+    select.classList.toggle('hidden', !show);
+    // 每秒刷新状态：内容不变或用户正在操作时不重建，避免下拉框被关掉。
+    if (!show || document.activeElement === select) return;
+    const current = settings.videoAsrModel || '';
+    const key = JSON.stringify([asrModels(), current]);
+    if (key === vsModelKey) return;
+    vsModelKey = key;
+    select.replaceChildren();
+    const add = (value, text) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = text;
+      select.appendChild(opt);
+    };
+    add('', '后端默认模型');
+    for (const m of asrModels()) add(m.id, m.label);
+    if (current && !asrModels().some(m => m.id === current)) add(current, `${current}（自定义）`);
+    select.value = current;
+    select.setAttribute('title', `转写模型：${asrModelLabel()}`);
+  }
+
+  function renderHomeOverview() {
+    const show = !status || !status.onWatchPage;
+    $('homeOverview').classList.toggle('hidden', !show);
+    $('coreSectionLabel').classList.toggle('hidden', show);
+    $('otherSectionLabel').classList.toggle('hidden', show);
+    $('liveCard').classList.toggle('hidden', show);
+    if (!show) return;
+    const liveReady = settings.liveProvider === 'qwen' ? !!settings.qwenApiKey : LT.Settings.keyList(settings).length > 0;
+    const liveName = settings.liveProvider === 'qwen' ? '千问 3.8' : 'Gemini 3.5';
+    $('homeLiveDesc').textContent = `${liveName} · ${liveReady ? '已配置' : '待配置接口'}`;
+    const src = describeVideoSource();
+    $('homeVideoDesc').textContent = src.text;
+  }
 
   function renderVideo() {
     const v = status && status.video;
@@ -86,33 +154,47 @@
     $('vsBox').classList.toggle('hidden', !show);
     if (!show) return;
 
-    const working = v.phase === 'reading' || v.phase === 'translating';
-    const pct = v.total ? Math.round((v.done / v.total) * 100) : 0;
+    const picker = canPickAsrModel();
+    const src = describeVideoSource(!picker);
+    $('vsSourcePill').textContent = src.text;
+    $('vsSourcePill').setAttribute('data-tone', src.tone);
+    renderAsrModelSelect(picker);
+
+    const working = ['downloading', 'transcribing', 'reading', 'translating'].includes(v.phase);
+    const pct = v.total ? Math.round((v.done / v.total) * 100) : (Number(v.progress) || 0);
     const target = LT.targetLabel(v.targetLang || settings.targetLang);
     const stale = v.staleConfig || (v.targetLang && v.targetLang !== settings.targetLang);
     let state = '';
     let hint = '';
-    let startLabel = '翻译整片字幕';
+    let startLabel = '开始视频翻译';
     switch (v.phase) {
+      case 'downloading':
+        state = v.stage || 'VPS 下载音频中…';
+        hint = '正在由云端 VPS 拉取音频并准备转写';
+        break;
+      case 'transcribing':
+        state = v.stage || `VPS 转写中${pct ? ` ${pct}%` : '…'}`;
+        hint = '步骤 1：云端转写模型正在生成高精度原文时间轴';
+        break;
       case 'reading':
-        state = '读取字幕轨…';
+        state = '读取原文中…';
         break;
       case 'translating':
         state = `翻译中 ${pct}%` + (v.frontierIdx >= 0 ? ` · 可看到 ${fmtClock(v.frontierMs)}` : ' · 正在翻译当前位置');
-        hint = '翻好的部分会立刻显示，可以边看边等。拖到没翻的地方会优先翻那里；关闭弹窗不影响。';
+        hint = '步骤 2：边看边译，拖动进度条会优先翻译当前位置';
         break;
       case 'ready':
-        state = v.fromCache ? '已就绪（缓存）' : '已就绪';
+        state = `${v.fromCache ? '已就绪（缓存）' : '已就绪'} · ${v.trackLabel || '原文'} → ${target}`;
         hint = stale
-          ? `当前缓存：${v.trackLabel || '字幕轨'} → ${target}。设置已变化，按新设置翻译请点「重新翻译」。`
-          : `${v.trackLabel || '字幕轨'} → ${target} · 共 ${v.unitCount} 条${v.saveError ? ' · 缓存未保存' : ''}`;
+          ? '设置已变化，按新设置翻译请点「重新翻译」'
+          : v.saveError ? '缓存未保存' : '';
         break;
       case 'partial':
-        state = `已翻译 ${v.done}/${v.total} 块` + (v.failed ? `，${v.failed} 块失败` : '');
+        state = `已译 ${v.done}/${v.total} 块` + (v.failed ? `（${v.failed} 块失败）` : '');
         startLabel = '继续翻译';
         hint = stale
-          ? `当前缓存译成${target}，设置已变化。恢复原设置后可续翻，或点「重新翻译」使用新设置。`
-          : '继续会复用已完成的片段，只翻剩下的。';
+          ? `当前缓存译成${target}，设置已变化；可点「重新翻译」应用新设置`
+          : '';
         break;
       case 'error':
         state = '出错';
@@ -125,7 +207,6 @@
           startLabel = v.cachedComplete ? '加载缓存字幕' : '继续翻译';
         } else {
           state = '未翻译';
-          hint = '读取这个视频的字幕轨，用文字模型整片翻译并缓存；再看同一视频不再花额度。';
         }
         break;
     }
@@ -141,12 +222,16 @@
     $('vsToggle').textContent = v.visible ? '隐藏字幕' : '显示字幕';
     $('vsRetranslate').classList.toggle('hidden', working || !(v.phase === 'ready' || v.phase === 'partial'));
     $('vsHint').textContent = hint;
+    $('vsHint').classList.toggle('error', v.phase === 'error' && !!hint);
   }
 
   function renderStatus() {
     const running = !!status && status.phase !== 'idle';
     const liveFocus = running || !!status?.isLive;
+    const nonLiveVideo = !!status?.onWatchPage && !status?.isLive && !running;
     $('liveDetails').classList.toggle('hidden', !running);
+    $('liveCard').classList.toggle('compact', nonLiveVideo);
+    $('liveCardHead').classList.toggle('hidden', nonLiveVideo);
     $('toggle').classList.toggle('primary', liveFocus);
     $('toggle').classList.toggle('ghost', !liveFocus);
     $('toggle').classList.toggle('secondary', !liveFocus);
@@ -163,7 +248,13 @@
             : '';
     dot.className = dotKind ? `dot ${dotKind}` : 'dot';
 
-    $('toggle').textContent = status?.phase === 'starting' ? '取消启动' : running ? '停止实时翻译' : '开始实时翻译';
+    $('toggle').textContent = status?.phase === 'starting'
+      ? '取消启动'
+      : running
+        ? '停止实时翻译'
+        : nonLiveVideo
+          ? '改用直播实时翻译（音频备选）'
+          : '开始直播实时翻译';
     $('toggle').classList.toggle('on', running);
     $('toggle').disabled = busy || !status || !status.onWatchPage;
     $('liveToggleCaptions').classList.toggle('hidden', !running);
@@ -188,24 +279,25 @@
     $('stTime').textContent = fmtTime(status?.elapsedMs);
     $('level').style.width = `${running ? status.level : 0}%`;
 
+    renderHomeOverview();
     renderVideo();
 
     if (!status) {
       $('videoTitle').textContent = tabId == null ? '打开一个 YouTube 直播或视频' : '当前页面尚未连接';
-      $('videoMeta').textContent = tabId == null ? '字幕会直接显示在播放器里' : '安装或更新插件后，刷新页面即可恢复';
+      $('videoMeta').textContent = tabId == null ? '也可在任意网页选中文字右键使用「流译」' : '安装或更新插件后，刷新页面即可恢复';
       $('tempContext').disabled = true;
       $('tempHint').textContent = '';
-      $('hint').textContent = 'Alt+T · 开始 / 停止实时翻译';
+      $('hint').textContent = '';
       banner('', '');
       return;
     }
     if (!status.onWatchPage) {
       $('videoTitle').textContent = '当前不是 YouTube 视频页';
-      $('videoMeta').textContent = '打开一个直播或视频页面再试';
+      $('videoMeta').textContent = '打开一个视频或直播即可开始翻译';
     } else {
       $('videoTitle').textContent = status.title || '（正在读取视频信息…）';
       $('videoMeta').textContent = [
-        status.isLive ? '直播中' : '录播/点播',
+        status.isLive ? '直播中' : '点播视频',
         status.usedMetadata ? '已注入标题简介' : '',
         status.usedTemp ? '已注入临时补充' : '',
         status.mode === 'script-processor' ? '兼容音频模式' : '',
@@ -219,16 +311,16 @@
     const temp = status.tempContext || '';
     if (document.activeElement !== ta && ta.value !== temp) ta.value = temp;
     ta.disabled = !status.onWatchPage;
-    $('tempHint').textContent = qwen
-      ? !settings.generateLiveContext || !settings.useMetadata
-        ? '千问只接收词表；需启用 AI 整理和标题简介，才能将补充用于词表整理。'
-        : running ? '修改后重新开始，会重新整理词表。' : '生成预览或开始时参与词表整理；换视频或刷新后清空。'
-      : running ? '修改后点下方「应用当前设置」即可生效。' : '生成预览或开始时生效；换视频或刷新后清空。';
+    $('tempHint').textContent = running ? '修改后点「应用当前设置并重新开始」生效' : '';
 
     const liveKey = settings.liveProvider === 'qwen' ? settings.qwenApiKey : LT.Settings.keyList(settings).length;
     if (!liveKey && !LT.Settings.provider(settings).apiKey) {
       const cached = !!status.video?.hasCache && !status.isLive;
-      banner(cached ? '缓存可直接观看；翻译新内容需配置 API Key。' : '还没有填 API Key，先去设置里填一个再开始。', cached ? 'info' : '');
+      banner(
+        cached ? '缓存可直接观看；翻译新内容请点击前往设置填入 API Key →' : '还没有配置 API Key，点击前往设置 →',
+        cached ? 'info' : '',
+        true
+      );
     } else if (running && status.phase === 'running') {
       banner('', '');
     } else if (settings.autoStartLive && status.onWatchPage && status.isLive) {
@@ -237,9 +329,9 @@
       banner('', '');
     }
 
-    $('hint').textContent = running
+    $('hint').textContent = running || !status.onWatchPage
       ? ''
-      : 'Alt+T · 开始 / 停止实时翻译（音频）';
+      : '快捷键 Alt+T · 开始 / 停止音频实时翻译';
   }
 
   async function refresh() {
@@ -256,26 +348,31 @@
     $('chatTranslationToggle').checked = !!settings.enableChatTranslation;
     $('commentTranslationToggle').checked = !!settings.enableCommentTranslation;
     const comments = textStatus?.comments;
+    const chat = textStatus?.chat;
+    const hasChatContext = !status || !!status.isLive || !!chat;
+    $('chatToggleRow').classList.toggle('hidden', !hasChatContext);
+    $('commentActions').classList.toggle('hidden', !settings.enableCommentTranslation);
     $('translateVisibleComments').disabled = !show || !settings.enableCommentTranslation || !!comments?.busy;
     $('cancelCommentTranslation').disabled = !comments?.busy;
-    const chat = textStatus?.chat;
+    $('cancelCommentTranslation').classList.toggle('hidden', !comments?.busy);
     const cloudChat = settings.chatProviderId !== 'local';
     const chatLabels = cloudChat
-      ? { off: '已关闭', waiting: '连接云端接口中', preparing: '连接中', ready: '云端模型翻译中', error: '云端接口出错' }
-      : { off: '已关闭', waiting: '请点击「准备本地翻译」', preparing: '准备/下载语言包中', ready: '本地翻译中', error: '不可用' };
+      ? { off: '已关闭', waiting: '连接云端接口中', preparing: '连接中', ready: '云端翻译中', error: '云端接口出错' }
+      : { off: '已关闭', waiting: '请点击「准备本地翻译」', preparing: '下载语言包中', ready: '本地翻译中', error: '不可用' };
     $('prepareChatTranslation').textContent = cloudChat ? '重试云端翻译' : '准备本地翻译';
-    $('chatPrepareActions').classList.toggle('hidden', !settings.enableChatTranslation ||
+    $('chatPrepareActions').classList.toggle('hidden', !hasChatContext || !settings.enableChatTranslation ||
       (chat?.phase === 'ready' && !chatPreparing && !chatPrepareMessage));
     $('prepareChatTranslation').classList.toggle('hidden', !settings.enableChatTranslation || chat?.phase === 'ready');
     $('prepareChatTranslation').disabled = !show || chatPreparing || chat?.phase === 'preparing';
     $('chatPrepareProgress').textContent = chatPrepareMessage;
     const lines = [];
-    if (settings.enableChatTranslation) lines.push(chat
-      ? `聊天：${chat.error || chat.downloadProgress || chatLabels[chat.phase] || chat.phase}${chat.translated ? ` · 已译 ${chat.translated} 条` : ''}`
-      : '聊天：等待聊天页面连接');
-    if (settings.enableCommentTranslation) lines.push(comments?.error ||
-      (comments?.busy ? `评论：等待/翻译中 ${comments.pending || 0} 条` : `评论：按需翻译${comments?.translated ? ` · 已译 ${comments.translated} 条` : ''}`));
-    $('textState').textContent = lines.join('\n') || '两项独立开关，不需要启动字幕翻译。';
+    if (hasChatContext && settings.enableChatTranslation) lines.push(chat
+      ? `弹幕：${chat.error || chat.downloadProgress || chatLabels[chat.phase] || chat.phase}${chat.translated ? ` · 已译 ${chat.translated} 条` : ''}`
+      : '弹幕：等待聊天室加载');
+    if (settings.enableCommentTranslation && (comments?.error || comments?.busy || comments?.translated)) {
+      lines.push(comments.error || (comments.busy ? `评论：翻译中（剩余 ${comments.pending || 0} 条）` : `评论：已译 ${comments.translated} 条`));
+    }
+    $('textState').textContent = lines.join('\n');
   }
 
   function cancelChatPreparation() {
@@ -388,19 +485,27 @@
     await send(LT.MSG.CANCEL_COMMENT_TRANSLATION);
     await refresh();
   });
-  $('openTextOptions').addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('src/ui/options.html#text') }));
+  const openOptionsHash = (hash) => () => chrome.tabs.create({ url: chrome.runtime.getURL(`src/ui/options.html#${hash}`) });
+  $('openTextOptions').addEventListener('click', openOptionsHash('text'));
+  $('openLiveOptions').addEventListener('click', openOptionsHash('live'));
+  $('openVideoOptions').addEventListener('click', openOptionsHash('video'));
+  $('homeOpenLive').addEventListener('click', openOptionsHash('live'));
+  $('homeOpenVideo').addEventListener('click', openOptionsHash('video'));
+  $('homeOpenText').addEventListener('click', openOptionsHash('text'));
+  $('homeOpenSpeech').addEventListener('click', openOptionsHash('speech'));
 
   function renderContext() {
     const r = contextReview;
     $('contextContent').classList.toggle('hidden', !r);
     $('copyContext').disabled = !r;
     if (!r) {
-      $('contextState').textContent = status?.previewBusy ? '正在整理背景与术语…' : '可在开始翻译前生成，检查后再开始。生成会调用单独选定的 AI 整理模型。';
+      $('contextState').textContent = status?.previewBusy ? '正在整理背景与术语…' : '';
       return;
     }
     const labels = { generated: '已生成背景和术语', disabled: '开播整理已关闭', no_metadata: '没有启用或读到页面资料', unavailable: '文字模型配置不完整，未生成', error: '整理失败，使用基础配置' };
+    const statusLabel = r.reusedCache && r.contextStatus === 'generated' ? '已复用缓存背景和术语' : (labels[r.contextStatus] || r.contextStatus);
     $('contextState').textContent = (r.phase === 'preview' ? '开播预览 · 尚未开始翻译 · ' : '本场启动时冻结 · ') +
-      (labels[r.contextStatus] || r.contextStatus) + (r.generatorModel ? ` · 整理模型：${r.generatorModel}` : '') +
+      statusLabel + (r.generatorModel ? ` · 整理模型：${r.generatorModel}` : '') +
       (r.contextTimeoutSeconds ? ` · 等待上限 ${r.contextTimeoutSeconds} 秒` : '') + (r.contextError ? `：${r.contextError}` : '');
     if (r.stale) $('contextState').textContent = '输入已变化，这份预览已失效；请重新生成，或开始时重新整理。';
     $('contextEffect').textContent = r.provider === 'qwen'
@@ -536,11 +641,22 @@
     });
   });
   $('vsCancel').addEventListener('click', () => videoAction(() => send(LT.MSG.VS_CANCEL)));
+  $('vsAsrModel').addEventListener('change', (e) => {
+    const value = e.target.value;
+    settingsSave = settingsSave.then(async () => {
+      settings = await LT.Settings.save({ videoAsrModel: value });
+      await send(LT.MSG.SETTINGS_CHANGED);
+      renderStatus();
+    }).catch(() => banner('转写模型保存失败，请重新打开弹窗后重试。', ''));
+  });
   $('vsToggle').addEventListener('click', () =>
     videoAction(() => send(LT.MSG.VS_SET_VISIBLE, !(status && status.video && status.video.visible)))
   );
 
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  $('banner').addEventListener('click', () => {
+    if (bannerClickable) chrome.runtime.openOptionsPage();
+  });
   $('toggleTheme').addEventListener('click', () => {
     const uiTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     const themeRevision = LT.UITheme.apply(uiTheme);

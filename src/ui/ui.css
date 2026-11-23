@@ -1,111 +1,173 @@
-/* 设置页与弹窗共用的控件与主题；深色采用中性灰背景和低饱和度操作色。 */
+/* 设置页与弹窗共用的基础控件与明暗主题；采用克制的中性灰阶与单一品牌强调色，减少视觉噪音。 */
 :root {
   color-scheme: light;
-  --bg: #f2f2f7;
+  --bg: #ffffff;
+  --sidebar-bg: #fafaf9;
   --card: #ffffff;
-  --surface: #f7f8fa;
-  --line: #e5e5ea;
-  --fg: #1c1c1e;
-  --muted: #63636b;
-  --accent: #0066cc;
-  --accent-soft: #edf5ff;
-  --ok: #248a3d;
-  --warn: #9a6700;
-  --err: #c9342b;
-  --hover: #eef0f4;
-  --pressed: #e5e8ed;
-  --primary: #0066cc;
-  --primary-hover: #005ab5;
-  --input-line: #dcdce2;
-  --placeholder: #74747d;
-  --danger-bg: #fff2f1;
-  --danger-line: #f3d1cd;
-  --danger-hover: #ffe6e3;
-  --info-bg: #edf5ff;
-  --info-line: #d4e6fb;
-  --info-fg: #245b96;
-  --header-bg: #ffffffef;
-  --secondary-fg: #3a3a3c;
-  --divider: #efeff3;
-  --toggle-track: #d1d1d6;
-  --segment-bg: #f1f1f5;
-  --selected-shadow: #1c1c1e1f;
-  --code-bg: #f0f0f5;
-  --soft-card: #fafbfc;
-  --role-line: #d9e8fa;
-  --preview-bg: #f8f9fb;
-  --selected-border: #b9d6f7;
+  --surface: #fafaf9;
+  --line: #ebebea;
+  --fg: #262626;
+  --muted: #787880;
+  --accent: #2563eb;
+  --accent-soft: #eff6ff;
+  --ok: #1f8a4c;
+  --warn: #b45309;
+  --err: #dc2626;
+  --hover: #f4f4f2;
+  --pressed: #eaeae7;
+  --nav-active: #eeeeec;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --input-line: #dcdcd9;
+  --placeholder: #94949c;
+  --danger-bg: #fef2f2;
+  --danger-line: #fecaca;
+  --danger-hover: #fee2e2;
+  --info-bg: #eff6ff;
+  --info-line: #dbeafe;
+  --info-fg: #1d4ed8;
+  --header-bg: #ffffffeb;
+  --secondary-fg: #4b4b52;
+  --divider: #f0f0ee;
+  --toggle-track: #d0d0d5;
+  --segment-bg: #f3f3f1;
+  --selected-shadow: #00000012;
+  --code-bg: #f4f4f3;
+  --soft-card: #fafaf9;
+  --role-line: #dbeafe;
+  --preview-bg: #fafaf9;
+  --selected-border: #bfdbfe;
+  --warn-bg: #fffbeb;
+  --warn-line: #fde68a;
+  --ok-bg: #ecfdf5;
+  /* 三类提供商的轻量化识别色：只在提供商图标与徽标处克制使用。 */
+  --kind-text: #4f46e5;
+  --kind-text-soft: #eef2ff;
+  --kind-text-line: #e0e7ff;
+  --kind-live: #dc2626;
+  --kind-live-soft: #fef2f2;
+  --kind-live-line: #fee2e2;
+  --kind-speech: #0d9488;
+  --kind-speech-soft: #f0fdfa;
+  --kind-speech-line: #ccfbf1;
+  --hue-blue: #2563eb;
+  --hue-amber: #b45309;
+  --hue-violet: #6d28d9;
+  --hue-green: #1f8a4c;
+  --hue-pink: #be185d;
+  --hue-slate: #475569;
+  --hue-gray: #64748b;
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #262626;
-  --card: #303030;
-  --surface: #383838;
-  --line: #484848;
-  --fg: #ececec;
-  --muted: #b5b5b5;
-  --accent: #8ab4f8;
-  --accent-soft: #343e4c;
-  --ok: #9dccae;
-  --warn: #dec18b;
-  --err: #f1a29a;
-  --hover: #424242;
-  --pressed: #4a4a4a;
-  --primary: #4b77b4;
-  --primary-hover: #416aa2;
-  --input-line: #555555;
-  --placeholder: #aaaaaa;
-  --danger-bg: #3f3030;
-  --danger-line: #644642;
-  --danger-hover: #4b3533;
-  --info-bg: #303b49;
-  --info-line: #485b72;
-  --info-fg: #b4ccec;
-  --header-bg: #303030ef;
-  --secondary-fg: #d8d8d8;
-  --divider: #434343;
-  --toggle-track: #626262;
-  --segment-bg: #383838;
-  --selected-shadow: #00000033;
-  --code-bg: #3c3c3c;
-  --soft-card: #353535;
-  --role-line: #505a67;
-  --preview-bg: #353535;
-  --selected-border: #617c9e;
+  --bg: #1d1d22;
+  --sidebar-bg: #232329;
+  --card: #1d1d22;
+  --surface: #25252c;
+  --line: #32323a;
+  --fg: #eeeef0;
+  --muted: #9898a6;
+  --accent: #6ea8fe;
+  --accent-soft: #222c3c;
+  --ok: #6ee7b7;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --hover: #2c2c34;
+  --pressed: #35353f;
+  --nav-active: #32323b;
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --input-line: #3d3d47;
+  --placeholder: #7a7a88;
+  --danger-bg: #322224;
+  --danger-line: #573337;
+  --danger-hover: #3e282b;
+  --info-bg: #202b3b;
+  --info-line: #31445f;
+  --info-fg: #93c5fd;
+  --header-bg: #1d1d22eb;
+  --secondary-fg: #c6c6d0;
+  --divider: #2c2c34;
+  --toggle-track: #4a4a55;
+  --segment-bg: #25252c;
+  --selected-shadow: #00000040;
+  --code-bg: #282830;
+  --soft-card: #222228;
+  --role-line: #31445f;
+  --preview-bg: #23232a;
+  --selected-border: #3b5984;
+  --warn-bg: #2f281c;
+  --warn-line: #524227;
+  --ok-bg: #1d3228;
+  --kind-text: #a5b4fc;
+  --kind-text-soft: #27273b;
+  --kind-text-line: #3b3b5c;
+  --kind-live: #fca5a5;
+  --kind-live-soft: #352326;
+  --kind-live-line: #543439;
+  --kind-speech: #5eead4;
+  --kind-speech-soft: #1d3130;
+  --kind-speech-line: #2d4c4a;
+  --hue-blue: #6ea8fe;
+  --hue-amber: #fbbf24;
+  --hue-violet: #c4b5fd;
+  --hue-green: #6ee7b7;
+  --hue-pink: #f472b6;
+  --hue-slate: #94a3b8;
+  --hue-gray: #9898a6;
 }
 /* 设置读取前先按系统给出底色，避免深色系统下闪过白底。 */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) { color-scheme: dark; --bg: #262626; --fg: #ececec; }
+  :root:not([data-theme]) { color-scheme: dark; --bg: #1d1d22; --fg: #eeeef0; }
 }
+[data-kind='text'], [data-group='llm'], [data-group='compatible'] { --k: var(--kind-text); --k-soft: var(--kind-text-soft); --k-line: var(--kind-text-line); }
+[data-kind='live'], [data-group='live'] { --k: var(--kind-live); --k-soft: var(--kind-live-soft); --k-line: var(--kind-live-line); }
+[data-kind='speech'], [data-group='speech'] { --k: var(--kind-speech); --k-soft: var(--kind-speech-soft); --k-line: var(--kind-speech-line); }
+[data-hue='blue'] { --hue: var(--hue-blue); }
+[data-hue='amber'] { --hue: var(--hue-amber); }
+[data-hue='red'] { --hue: var(--kind-live); }
+[data-hue='violet'] { --hue: var(--hue-violet); }
+[data-hue='green'] { --hue: var(--hue-green); }
+[data-hue='teal'] { --hue: var(--kind-speech); }
+[data-hue='pink'] { --hue: var(--hue-pink); }
+[data-hue='slate'] { --hue: var(--hue-slate); }
+[data-hue='gray'] { --hue: var(--hue-gray); }
 * { box-sizing: border-box; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.55;
 }
 h1, h2, h3 { margin: 0; font-weight: 600; }
 a { color: var(--accent); text-underline-offset: 3px; }
 button {
-  font: inherit; font-weight: 500; color: var(--fg); background: var(--surface);
-  border: 1px solid var(--line); border-radius: 9px; padding: 7px 12px; cursor: pointer;
+  font: inherit; font-weight: 500; color: var(--fg); background: var(--card);
+  border: 1px solid var(--input-line); border-radius: 8px; padding: 7px 12px; cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
 }
 button:hover { background: var(--hover); }
 button:active { background: var(--pressed); }
-button:disabled { opacity: .45; cursor: default; filter: none; }
-:is(button, input, select, textarea, summary, a):focus-visible { outline: 3px solid #007aff66; outline-offset: 3px; }
-button.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+button:disabled { opacity: .48; cursor: not-allowed; filter: none; }
+:is(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 500; }
 button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
-button.danger { background: var(--danger-bg); border-color: var(--danger-line); color: var(--err); }
-button.danger:hover { background: var(--danger-hover); }
-button.ghost { background: transparent; color: var(--accent); }
-button.ghost:hover { background: var(--accent-soft); }
+button.danger { background: var(--card); border-color: var(--input-line); color: var(--err); }
+button.danger:hover { background: var(--danger-bg); border-color: var(--danger-line); }
+button.ghost { background: transparent; border-color: transparent; color: var(--secondary-fg); }
+button.ghost:hover { background: var(--hover); color: var(--fg); }
 input[type='text'], input[type='number'], input[type='password'], select, textarea {
-  width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--input-line);
-  border-radius: 9px; padding: 8px 10px; font: inherit;
+  width: 100%; background: var(--card); color: var(--fg); border: 1px solid var(--input-line);
+  border-radius: 8px; padding: 8px 12px; font: inherit;
+  transition: background-color .15s ease, border-color .15s ease;
 }
+input[type='text']:hover:not(:disabled):not([readonly]),
+input[type='number']:hover:not(:disabled):not([readonly]),
+input[type='password']:hover:not(:disabled):not([readonly]),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled):not([readonly]) { background: var(--hover); }
 input::placeholder, textarea::placeholder { color: var(--placeholder); }
 select { min-height: 36px; }
 textarea { resize: vertical; min-height: 60px; line-height: 1.65; }
@@ -118,26 +180,26 @@ label { display: block; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .field { margin-bottom: 14px; }
-.field > .label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.field > .label { display: block; margin-bottom: 6px; color: var(--secondary-fg); font-size: 13px; font-weight: 500; }
 .check { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; cursor: pointer; }
 .check input { margin-top: 3px; flex: 0 0 auto; }
-/* 保留原生 checkbox 的键盘与表单行为，只把长期功能开关画成滑块。 */
+/* 精致紧凑的滑块开关（参照现代桌面设置页比例），保留原生 checkbox 语义。 */
 .check:not(.inline) input[type='checkbox'], .text-check input[type='checkbox'] {
-  appearance: none; position: relative; flex: 0 0 44px; width: 44px; height: 26px; margin: 0;
-  background: var(--toggle-track); border: 0; border-radius: 15px; cursor: pointer;
-  transition: background .15s ease;
+  appearance: none; position: relative; flex: 0 0 34px; width: 34px; height: 20px; margin: 0;
+  background: var(--toggle-track); border: 0; border-radius: 999px; cursor: pointer;
+  transition: background-color .16s ease;
 }
 .check:not(.inline) input[type='checkbox']::before, .text-check input[type='checkbox']::before {
-  content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
-  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #00000026; transition: transform .15s ease;
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0000002e; transition: transform .16s ease;
 }
-.check:not(.inline) input[type='checkbox']:checked, .text-check input[type='checkbox']:checked { background: #34c759; }
-.check:not(.inline) input[type='checkbox']:checked::before, .text-check input[type='checkbox']:checked::before { transform: translateX(18px); }
-.check:not(.inline) input[type='checkbox']:disabled, .text-check input[type='checkbox']:disabled { opacity: .45; cursor: default; }
+.check:not(.inline) input[type='checkbox']:checked, .text-check input[type='checkbox']:checked { background: var(--primary); }
+.check:not(.inline) input[type='checkbox']:checked::before, .text-check input[type='checkbox']:checked::before { transform: translateX(14px); }
+.check:not(.inline) input[type='checkbox']:disabled, .text-check input[type='checkbox']:disabled { opacity: .45; cursor: not-allowed; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #8e8e93; flex: 0 0 auto; }
-.dot.ok { background: #34c759; }
-.dot.warn { background: #ff9500; }
-.dot.err { background: #ff3b30; }
+.dot.ok { background: #22c55e; }
+.dot.warn { background: #f59e0b; }
+.dot.err { background: #ef4444; }
 @media (prefers-reduced-motion: reduce) {
   .check input[type='checkbox'], .check input[type='checkbox']::before,
   .text-check input[type='checkbox'], .text-check input[type='checkbox']::before { transition: none; }

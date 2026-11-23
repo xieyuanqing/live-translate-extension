@@ -22,6 +22,8 @@ globalThis.LT = globalThis.LT || {};
   const numOr = (v, dflt) => (v === '' || v == null || !Number.isFinite(Number(v)) ? dflt : Number(v));
   const color = (v, fallback) => (/^#[0-9a-f]{6}$/i.test(String(v || '')) ? String(v).toLowerCase() : fallback);
   const newProviderId = () => `p-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  // 未知或缺省的协议沿用旧逻辑按 Gemini 处理。
+  const textApiType = (v) => (LT.TEXT_API_TYPES.some(t => t.code === v) ? v : 'gemini');
 
   /** 请求头名称不区分大小写；兼容旧设置中没有 headers 的情况。 */
   function normalizeHeaders(raw) {
@@ -42,7 +44,7 @@ globalThis.LT = globalThis.LT || {};
   /** 统一提供商配置，按类型保留实际客户端支持的字段。 */
   function normalizeProvider(raw) {
     const p = raw && typeof raw === 'object' ? raw : {};
-    const apiType = p.apiType === 'openai' ? 'openai' : 'gemini';
+    const apiType = textApiType(p.apiType);
     const baseUrl = String(p.baseUrl || '').trim().replace(/\/+$/, '');
     const available = LT.PROVIDER_PRESETS.filter(item => !item.pending);
     // 旧配置按实际协议和地址识别，无法识别的保留为同协议的自定义提供商。
@@ -118,8 +120,12 @@ globalThis.LT = globalThis.LT || {};
     const s = Object.assign({}, LT.DEFAULTS, raw || {});
     if (!['system', 'light', 'dark'].includes(s.uiTheme)) s.uiTheme = LT.DEFAULTS.uiTheme;
     for (const k of RETIRED) delete s[k];
-    if (!Array.isArray(s.scenes) || s.scenes.length === 0) s.scenes = LT.DEFAULT_SCENES;
-    if (!s.scenes.some((x) => x.id === s.sceneId)) s.sceneId = s.scenes[0].id;
+    if (!Array.isArray(s.scenes) || s.scenes.length === 0 || s.scenes.some((x) => x && x.id === 'vtuber')) {
+      s.scenes = JSON.parse(JSON.stringify(LT.DEFAULT_SCENES));
+      s.sceneId = s.scenes[0].id;
+    } else if (!s.scenes.some((x) => x.id === s.sceneId)) {
+      s.sceneId = s.scenes[0].id;
+    }
     if (!s.baseUrl) s.baseUrl = LT.DEFAULT_BASE_URL;
     if (!LT.LIVE_PROVIDERS.some((p) => p.code === s.liveProvider)) s.liveProvider = 'gemini';
     s.qwenWorkspaceHost = String(s.qwenWorkspaceHost || '').trim().replace(/^wss?:\/\//i, '').replace(/\/$/, '');
@@ -161,6 +167,21 @@ globalThis.LT = globalThis.LT || {};
     s.captionSourceColor = color(s.captionSourceColor, LT.DEFAULTS.captionSourceColor);
     s.captionSourceScale = clamp(Number(s.captionSourceScale) || 0.78, 0.6, 1);
     s.subsExtraInstruction = String(s.subsExtraInstruction || '');
+    if (!LT.VIDEO_TRANSCRIPT_MODES.some((m) => m.code === s.videoTranscriptMode)) s.videoTranscriptMode = 'auto';
+    s.videoAsrBaseUrl = String(s.videoAsrBaseUrl || '').trim().replace(/\/+$/, '');
+    s.videoAsrToken = String(s.videoAsrToken || '').trim();
+    s.videoAsrModel = String(s.videoAsrModel || '').trim();
+    s.videoAsrModels = Array.isArray(s.videoAsrModels)
+      ? s.videoAsrModels
+          .filter((item) => item && typeof item.id === 'string' && item.id.trim())
+          .map((item) => ({
+            id: item.id.trim(),
+            label: String(item.label || item.id).trim(),
+            provider: String(item.provider || '').trim(),
+            description: String(item.description || '').trim(),
+          }))
+      : [];
+    s.videoAsrSendContext = s.videoAsrSendContext !== false;
     // 旧版独立的直播/朗读连接一次性并入列表，后续只读取列表里的配置。
     const ids = new Set();
     s.providers = (Array.isArray(s.providers) ? s.providers : [])
@@ -224,6 +245,7 @@ globalThis.LT = globalThis.LT || {};
     normalizeProvider,
     normalizeHeaders,
     headerError,
+    textApiType,
     providersFor,
     serviceProvider,
     persistable,

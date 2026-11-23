@@ -58,6 +58,45 @@ globalThis.LT = globalThis.LT || {};
     return JSON.stringify([provider, reuse ? LT.Settings.keyList(settings) : [],
       provider.kind === 'speech' && reuse ? LT.Settings.providersFor(settings, 'text').filter(p => p.enabled !== false && p.apiType === 'gemini').map(p => p.apiKey) : []]);
   }
+  /** 检查视频翻译的 VPS 云端转写配置状态（方案一：VPS 只转写原文，不替代文字翻译模型）。 */
+  function videoAsrState(settings) {
+    const mode = settings.videoTranscriptMode || 'auto';
+    const baseUrl = String(settings.videoAsrBaseUrl || '').trim();
+    const label = 'VPS 云端转写';
+    const route = '#video';
+    if (mode === 'youtube') {
+      return { mode, enabled: false, required: false, configured: false, complete: true, origins: [], missing: [], route, label };
+    }
+    if (!baseUrl) {
+      return {
+        mode,
+        enabled: true,
+        required: mode === 'vps',
+        configured: false,
+        complete: mode !== 'vps',
+        origins: [],
+        missing: ['VPS 服务地址'],
+        route,
+        label,
+      };
+    }
+    const origins = httpOrigins(baseUrl);
+    if (!origins) {
+      return {
+        mode,
+        enabled: true,
+        required: mode === 'vps',
+        configured: false,
+        complete: false,
+        origins: [],
+        missing: ['有效的 VPS 地址'],
+        route,
+        label,
+      };
+    }
+    return { mode, enabled: true, required: mode === 'vps', configured: true, complete: true, origins, missing: [], route, label };
+  }
   LT.OptionsUI.connectionState = connectionState;
   LT.OptionsUI.providerSignature = providerSignature;
+  LT.OptionsUI.videoAsrState = videoAsrState;
 })();

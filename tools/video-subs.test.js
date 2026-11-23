@@ -389,3 +389,81 @@ test('读取字幕轨期间取消，会通知页面桥放弃读取', async () =>
   assert.equal(h.ctrl.phase, 'idle');
   assert.equal(h.calls.length, 0);
 });
+
+test('VPS 模式完整流程：字符串上下文、0..100 进度、阶段映射与缓存衔接', async () => {
+  const h = harness({ unitCount: 3 });
+  const vpsCalls = [];
+  const snapshots = [];
+  h.ctrl.onStatus = () => snapshots.push(h.ctrl.status());
+  h.LT.VpsAsr = {
+    transcribe: async args => {
+      vpsCalls.push(args);
+      args.onProgress({ status: 'downloading', progress: 0, stage: '正在下载音频' });
+      args.onProgress({ status: 'transcribing', progress: 65, stage: '正在转写 2/3 段' });
+      return {
+        model: 'gemini-3.5-transcribe',
+        provider: 'gemini',
+        lang: 'ja',
+        cached: false,
+        units: [
+          { id: 1, start: 0, end: 1200, text: 'VPS原文1' },
+          { id: 2, start: 1200, end: 2600, text: 'VPS原文2' },
+        ],
+      };
+    },
+  };
+  h.settings.videoTranscriptMode = 'vps';
+  h.settings.videoAsrBaseUrl = 'https://asr.example.com';
+  h.settings.videoAsrModel = 'gemini-3.5-transcribe';
+  h.settings.videoAsrModels = [{ id: 'gemini-3.5-transcribe', label: 'Gemini 3.5 Transcribe', provider: 'gemini', description: '' }];
+  h.settings.videoAsrSendContext = true;
+  h.settings.useMetadata = true;
+  h.settings.manualContext = '专名：流译';
+
+  await h.start({ meta: { title: '测试视频', author: '测试频道' }, tempContext: '临时补充' });
+  assert.equal(h.ctrl.phase, 'ready');
+  assert.equal(vpsCalls.length, 1);
+  assert.equal(typeof vpsCalls[0].context, 'string');
+  assert.match(vpsCalls[0].context, /测试视频/);
+  assert.match(vpsCalls[0].context, /专名：流译/);
+  assert.match(vpsCalls[0].context, /临时补充/);
+  assert.equal(vpsCalls[0].url, 'https://www.youtube.com/watch?v=vid-A');
+
+  const dlSnap = snapshots.find(s => s.stage === '正在下载音频');
+  const trSnap = snapshots.find(s => s.stage === '正在转写 2/3 段');
+  assert.equal(dlSnap.phase, 'downloading');
+  assert.equal(trSnap.phase, 'transcribing');
+  assert.equal(trSnap.progress, 65);
+  assert.equal(h.ctrl.trackLabel, 'VPS 转写 · Gemini 3.5 Transcribe');
+  assert.equal(h.ctrl.sourceKind, 'vps');
+  assert.deepEqual([...h.ctrl.texts], ['译1', '译2']);
+});
+
+test('auto 模式：仅有自动字幕时走 VPS，有人工作字幕时走字幕轨；VPS 断线直接报错', async () => {
+  const h = harness({ unitCount: 3 });
+  let vpsUsed = 0;
+  h.LT.VpsAsr = {
+    transcribe: async () => {
+      vpsUsed++;
+      throw new Error('无法连接 VPS 转写服务，请检查服务是否在线、地址是否正确且域名已授权');
+    },
+  };
+  h.settings.videoTranscriptMode = 'auto';
+  h.settings.videoAsrBaseUrl = 'https://asr.example.com';
+
+  await h.start();
+  assert.equal(vpsUsed, 1);
+  assert.equal(h.ctrl.phase, 'error');
+  assert.match(h.ctrl.error, /无法连接 VPS/);
+
+  // 换成人工字幕轨后，auto 模式直接走 YouTube 字幕轨
+  h.LT.YouTube.captionTracks = async () => ({
+    videoId: 'vid-A',
+    defaultIndex: 0,
+    tracks: [{ languageCode: 'ja', kind: '', name: '日本語', vssId: '.ja', baseUrl: '' }],
+  });
+  await h.start();
+  assert.equal(vpsUsed, 1);
+  assert.equal(h.ctrl.phase, 'ready');
+  assert.equal(h.ctrl.sourceKind, 'youtube');
+});

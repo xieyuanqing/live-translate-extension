@@ -15,7 +15,18 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'ut
 
 const STUB = `// 离线预览用的 chrome.* 替身，只在 dist/preview 里存在
 (() => {
-  window.fetch = async () => { throw new Error('离线预览不会连接真实接口，请在已安装扩展中测试。'); };
+  const ASR_MODELS = [
+    { id: 'gemini-3.5-transcribe', label: 'Gemini 3.5 Transcribe', provider: 'Google', description: '多语种高精度转写，擅长人名与专词。' },
+    { id: 'whisper-large-v3-turbo', label: 'Whisper Large v3 Turbo', provider: 'Groq', description: '速度快、成本低，适合长视频。' },
+  ];
+  // 只模拟示例 VPS 的探活与模型清单；其它请求一律拒绝，不发真实网络请求。
+  window.fetch = async (input) => {
+    const url = String(input?.url || input);
+    const json = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (url === 'https://asr.example.com/health') return json({ ok: true, version: 'preview' });
+    if (url === 'https://asr.example.com/api/models') return json({ ok: true, version: 'preview', defaultModel: 'gemini-3.5-transcribe', models: ASR_MODELS });
+    throw new Error('离线预览不会连接真实接口，请在已安装扩展中测试。');
+  };
   const store = {
     settings: {
       apiKeys: '',
@@ -26,6 +37,10 @@ const STUB = `// 离线预览用的 chrome.* 替身，只在 dist/preview 里存
       ],
       subsProviderId: 'p-default',
       captionDisplayMode: 'bilingual',
+      videoTranscriptMode: 'auto',
+      videoAsrBaseUrl: 'https://asr.example.com',
+      videoAsrModel: 'gemini-3.5-transcribe',
+      videoAsrModels: ASR_MODELS,
     },
     'vs:m:preview01': { videoId: 'preview01', title: '【歌回】示例视频标题', trackLabel: '日本語（自动字幕）', targetLang: 'zh', complete: true, unitCount: 1234, model: 'gemini-x-flash', updatedAt: Date.now() },
   };
@@ -54,7 +69,7 @@ const STUB = `// 离线预览用的 chrome.* 替身，只在 dist/preview 里存
       },
     },
     permissions: (() => {
-      const granted = new Set(['https://generativelanguage.googleapis.com/*']);
+      const granted = new Set(['https://generativelanguage.googleapis.com/*', 'https://asr.example.com/*']);
       return { contains: async ({ origins }) => granted.has('<all_urls>') || origins.every(origin => granted.has(origin)),
         request: async ({ origins }) => { origins.forEach(origin => granted.add(origin)); return true; } };
     })(),

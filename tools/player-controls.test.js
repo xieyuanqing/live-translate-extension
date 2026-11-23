@@ -53,13 +53,23 @@ class FakeNode {
   }
 }
 
-test('流译按钮只插入底部控制栏，按直播/整片状态切换并适应控制栏重建', () => {
-  const document = { createElement: tag => new FakeNode(tag), createElementNS: (_ns, tag) => new FakeNode(tag) };
+test('流译按钮插入底部控制栏，点击展开二级菜单并支持启停、显隐与字幕外观调节', () => {
+  const docListeners = new Map();
+  const document = {
+    createElement: tag => new FakeNode(tag),
+    createElementNS: (_ns, tag) => new FakeNode(tag),
+    addEventListener(type, fn) { docListeners.set(type, fn); },
+    removeEventListener(type) { docListeners.delete(type); },
+  };
   const ctx = vm.createContext({ document, chrome: { runtime: { getURL: path => `extension://${path}` } } });
   load(ctx, 'src/content/player-controls.js');
-  let captions = 0, translation = 0;
+  let captions = 0, translation = 0, retranslate = 0;
+  const patches = [];
   const controls = new ctx.LT.PlayerControls({
-    onToggleCaptions: () => captions++, onToggleTranslation: () => translation++,
+    onToggleCaptions: () => captions++,
+    onToggleTranslation: () => translation++,
+    onRetranslate: () => retranslate++,
+    onUpdateSettings: (patch) => patches.push(patch),
   });
   const player = new FakeNode('div');
   player.connected = true;
@@ -77,26 +87,59 @@ test('流译按钮只插入底部控制栏，按直播/整片状态切换并适�
   assert.equal(bar.children[0], controls.root);
   assert.equal(bar.children[1], nativeCc);
   assert.equal(controls.button.children[0].tag, 'svg');
-  assert.equal(controls.root.children.length, 1);
+  assert.equal(controls.root.children.length, 2);
+  assert.equal(controls.menu.hidden, true);
   assert.equal(controls.root.style.position, undefined);
+
   controls.update({ modeKnown: false, isLive: false, phase: 'idle', liveCaptionsVisible: true, video: { phase: 'idle', visible: true } });
   assert.equal(controls.button.disabled, true);
-  controls.update({ modeKnown: true, isLive: true, phase: 'idle', liveCaptionsVisible: true, video: { phase: 'idle' } });
+  controls.button.fire('click');
+  assert.equal(controls.menu.hidden, true);
+
+  controls.update({
+    modeKnown: true, isLive: true, phase: 'idle', liveCaptionsVisible: true,
+    captionScale: 1, captionBottom: 11, captionDisplayMode: 'bilingual',
+    video: { phase: 'idle' },
+  });
   assert.equal(controls.button.attributes['aria-label'], '开始实时翻译');
-  controls.update({ modeKnown: true, isLive: true, phase: 'running', liveCaptionsVisible: true, video: { phase: 'idle' } });
+  assert.equal(controls.modeRow.hidden, true);
+  controls.button.fire('click');
+  assert.equal(controls.menu.hidden, false);
+  assert.equal(controls.button.attributes['aria-expanded'], 'true');
+
+  controls.update({
+    modeKnown: true, isLive: true, phase: 'running', liveCaptionsVisible: true,
+    captionScale: 1, captionBottom: 11, captionDisplayMode: 'bilingual',
+    video: { phase: 'idle' },
+  });
   assert.equal(controls.button.attributes['aria-label'], '停止实时翻译');
   assert.equal(controls.button.attributes['aria-pressed'], 'true');
-  controls.button.fire('click');
+  assert.equal(controls.primaryBtn.textContent, '停止实时翻译');
+  controls.primaryBtn.fire('click');
   assert.deepEqual([captions, translation], [0, 1]);
+
   let stopped = false, prevented = false;
   controls.root.fire('click', { stopPropagation() { stopped = true; } });
   controls.root.fire('dblclick', { preventDefault() { prevented = true; } });
   assert.equal(stopped, true);
   assert.equal(prevented, true);
 
-  controls.update({ modeKnown: true, isLive: false, phase: 'idle', video: { phase: 'translating', visible: false, done: 3, total: 10 } });
-  assert.equal(controls.button.attributes['aria-label'], '取消整片翻译');
+  // 点击菜单外部或按 Escape 收起二级菜单
+  docListeners.get('pointerdown')?.({ target: nativeCc });
+  assert.equal(controls.menu.hidden, true);
   controls.button.fire('click');
+  assert.equal(controls.menu.hidden, false);
+  controls.root.fire('keydown', { key: 'Escape' });
+  assert.equal(controls.menu.hidden, true);
+
+  controls.update({
+    modeKnown: true, isLive: false, phase: 'idle',
+    captionScale: 1, captionBottom: 11, captionDisplayMode: 'bilingual',
+    video: { phase: 'translating', visible: false, done: 3, total: 10 },
+  });
+  assert.equal(controls.button.attributes['aria-label'], '取消整片翻译');
+  assert.equal(controls.modeRow.hidden, false);
+  controls.primaryBtn.fire('click');
   assert.equal(translation, 2);
 
   controls.mount(player);
@@ -111,13 +154,36 @@ test('流译按钮只插入底部控制栏，按直播/整片状态切换并适�
   assert.notEqual(controls.root, oldRoot);
   assert.equal(controls.button.attributes['aria-label'], '取消整片翻译');
 
-  controls.update({ modeKnown: true, isLive: false, phase: 'idle', video: { phase: 'ready', visible: true } });
+  controls.update({
+    modeKnown: true, isLive: false, phase: 'idle',
+    captionScale: 1.2, captionBottom: 15, captionDisplayMode: 'bilingual',
+    video: { phase: 'ready', visible: true },
+  });
   assert.equal(controls.button.attributes['aria-label'], '隐藏整片字幕');
-  controls.button.fire('click');
+  assert.equal(controls.scaleVal.textContent, '120%');
+  assert.equal(controls.bottomVal.textContent, '15%');
+  controls.captionRow.fire('click');
   assert.equal(captions, 1);
+  controls.primaryBtn.fire('click');
+  assert.equal(retranslate, 1);
+
+  // 调节双语模式、字号与距底高度
+  controls.modeButtons.translationOnly.fire('click');
+  controls.scaleUp.fire('click');
+  controls.scaleVal.fire('click');
+  controls.bottomDown.fire('click');
+  controls.bottomVal.fire('click');
+  assert.deepEqual(JSON.parse(JSON.stringify(patches)), [
+    { captionDisplayMode: 'translationOnly' },
+    { captionScale: 1.3 },
+    { captionScale: 1 },
+    { captionBottom: 13 },
+    { captionBottom: 11 },
+  ]);
+
   controls.update({ modeKnown: true, isLive: false, phase: 'idle', video: { phase: 'ready', visible: false } });
   assert.equal(controls.button.attributes['aria-label'], '显示整片字幕');
-  controls.button.fire('click');
+  controls.captionRow.fire('click');
   assert.equal(captions, 2);
   controls.unmount();
   assert.equal(newBar.children.length, 0);

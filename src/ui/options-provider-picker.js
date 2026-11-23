@@ -7,14 +7,11 @@ globalThis.LT = globalThis.LT || {};
 
   const GROUPS = [
     { code: 'llm', label: '文字模型', description: '填写自己的 Key，同一接口可供多个功能选择不同模型。' },
-    { code: 'compatible', label: '自定义接口', description: '支持 OpenAI 兼容或 Gemini 协议，可填写自己的地址和请求头。' },
+    { code: 'compatible', label: '自定义接口', description: '支持 OpenAI 兼容、Gemini 或 Claude 协议，可填写自己的地址和请求头。' },
     { code: 'live', label: '实时音频翻译', description: '连接播放器音频翻译服务。' },
     { code: 'speech', label: '原文朗读', description: '配置朗读服务、连接和音色。' },
   ];
-  const MARKS = {
-    gemini: '✦', openai: 'O', deepseek: 'DS', bailian: '阿', 'bailian-intl': '阿', groq: 'g', moonshot: 'M',
-    custom: '≡', 'gemini-live': '✦', 'qwen-live': '千', 'microsoft-tts': 'M', 'gemini-tts': '✦',
-  };
+  // 标识与提供商列表共用（options-providers.js）。
 
   function node(tag, className, text) {
     const element = document.createElement(tag);
@@ -27,7 +24,10 @@ globalThis.LT = globalThis.LT || {};
     for (const group of GROUPS) {
       const section = node('section', 'provider-catalog-group');
       section.dataset.group = group.code;
-      const title = node('h3', '', group.label);
+      const title = node('h3');
+      const glyph = node('span', 'kind-glyph');
+      glyph.setAttribute('aria-hidden', 'true');
+      title.append(glyph, group.label);
       title.id = `provider-group-${group.code}`;
       section.setAttribute('aria-labelledby', title.id);
       section.append(title, node('p', 'provider-catalog-description', group.description));
@@ -36,7 +36,7 @@ globalThis.LT = globalThis.LT || {};
         const item = node('button', 'provider-catalog-item');
         item.type = 'button';
         item.dataset.preset = preset.code;
-        const mark = node('span', 'provider-catalog-mark', MARKS[preset.code] || preset.label.slice(0, 1));
+        const mark = node('span', 'provider-catalog-mark', LT.OptionsUI.providerMark(preset));
         mark.setAttribute('aria-hidden', 'true');
         const name = node('span', 'provider-catalog-name');
         const region = /^(.+)(（[^）]+）)$/.exec(preset.label);

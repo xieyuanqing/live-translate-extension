@@ -41,6 +41,8 @@ globalThis.LT = globalThis.LT || {};
       metadataLimit: settings.metadataLimit, manualContext: settings.manualContext,
       extraInstruction: settings.subsExtraInstruction || '',
       apiType: config.apiType, baseUrl: config.baseUrl, model: config.model,
+      videoTranscriptMode: settings.videoTranscriptMode || 'auto',
+      videoAsrBaseUrl: settings.videoAsrBaseUrl || '', videoAsrModel: settings.videoAsrModel || '',
     });
   };
 
@@ -60,6 +62,9 @@ globalThis.LT = globalThis.LT || {};
     reset(videoId) {
       this.videoId = videoId;
       this.phase = 'idle'; // idle | reading | translating | ready | partial | error
+      this.progress = 0;
+      this.stage = '';
+      this.sourceKind = '';
       this.error = '';
       this.units = null; // [{id,start,end,text}]
       this.texts = []; // 与 units 对齐的译文，未翻为 undefined
@@ -124,6 +129,7 @@ globalThis.LT = globalThis.LT || {};
         requests: this.requests,
         model: this.meta ? this.meta.model : this.config ? this.config.model : '',
         targetLang: this.meta ? this.meta.targetLang : '',
+        progress: this.progress, stage: this.stage, sourceKind: this.sourceKind,
       };
     }
 
@@ -237,6 +243,7 @@ globalThis.LT = globalThis.LT || {};
         trackKey: meta.trackKey,
         trackLabel: meta.trackLabel || '',
         isAsr: !!src.isAsr,
+        sourceKind: src.sourceKind || (String(meta.trackKey).startsWith('vps|') ? 'vps' : 'youtube'),
         fromCache: true,
       });
       this.phase = states.every((s) => s === 'done') ? 'ready' : 'partial';
@@ -264,7 +271,7 @@ globalThis.LT = globalThis.LT || {};
     }
 
     cancel() {
-      const active = this.phase === 'reading' || this.phase === 'translating';
+      const active = ['reading', 'downloading', 'transcribing', 'translating'].includes(this.phase);
       this.generation++;
       this.abortAll();
       this.fatal = null;
@@ -301,7 +308,7 @@ globalThis.LT = globalThis.LT || {};
      *   force：重新翻译，丢弃当前配置指纹下的旧译文
      */
     async start({ settings, meta, tempContext, force = false }) {
-      if (this.phase === 'reading' || this.phase === 'translating') return;
+      if (['reading', 'downloading', 'transcribing', 'translating'].includes(this.phase)) return;
       const videoId = LT.YouTube.videoIdFromUrl();
       if (!videoId) return;
       const gen = ++this.generation;
@@ -312,12 +319,14 @@ globalThis.LT = globalThis.LT || {};
       this.fatal = null;
       this.saveError = '';
       this.visible = true;
-      this.note('流译：读取字幕轨…', 'warn', false);
+      this.progress = 0;
+      this.stage = '';
+      this.note(settings.videoTranscriptMode === 'youtube' ? '流译：读取字幕轨…' : '流译：正在获取视频原文…', 'warn', false);
       this.emit();
 
       try {
         const run = { videoId, settings, meta, tempContext, force, gen, config: LT.TextModel.resolve(settings, settings.subsProviderId, settings.subsModel) };
-        const source = await this.loadSource(videoId, settings, alive);
+        const source = await this.loadSource(videoId, settings, run.meta, tempContext, force, alive);
         if (!source || !alive()) return;
 
         const prompt = this.buildPromptAndFingerprint(run, source);
@@ -336,7 +345,8 @@ globalThis.LT = globalThis.LT || {};
       }
     }
 
-    async loadSource(videoId, settings, alive) {
+    async loadSource(videoId, settings, meta, tempContext, force, alive) {
+      if (typeof meta === 'function') { alive = meta; meta = null; tempContext = ''; force = false; }
       let cachedMeta = (await LT.SubsCache.getMeta(videoId)) || null;
       if (!alive()) return null;
       let units = null;
@@ -346,9 +356,14 @@ globalThis.LT = globalThis.LT || {};
       if (cachedMeta && cachedMeta.trackKey) {
         const src = await LT.SubsCache.getSource(videoId, cachedMeta.trackKey);
         if (!alive()) return null;
+        const mode = settings.videoTranscriptMode || 'auto';
+        const vpsTrack = String(cachedMeta.trackKey).startsWith('vps|');
+        const modelFits = !settings.videoAsrModel || !vpsTrack || String(cachedMeta.trackKey).endsWith(`|${settings.videoAsrModel}`) || force;
+        const autoUpgrade = mode === 'auto' && !!settings.videoAsrBaseUrl && !!src.isAsr;
         const fits =
           validSource(src) &&
-          (settings.sourceLang === 'auto' || langBase(src.lang) === langBase(settings.sourceLang));
+          (settings.sourceLang === 'auto' || langBase(src.lang) === langBase(settings.sourceLang)) &&
+          (mode !== 'vps' || vpsTrack) && (mode !== 'youtube' || !vpsTrack) && modelFits && !force && !autoUpgrade;
         if (fits) {
           units = unpack(src.units);
           trackKey = cachedMeta.trackKey;
@@ -358,14 +373,112 @@ globalThis.LT = globalThis.LT || {};
       }
       if (!units) {
         // 原文失效后编号可能完全变化，不能走「旧设置缓存」的复用路径。
-        cachedMeta = null;
-        const read = await this.readTrack(videoId, settings, alive);
+        if (!force) cachedMeta = null;
+        let read;
+        const mode = settings.videoTranscriptMode || 'auto';
+        if (mode === 'vps') {
+          if (!settings.videoAsrBaseUrl) throw new Error('已选择强制云端转写，但尚未配置 VPS 服务地址，请前往设置 → 视频翻译填写');
+          read = await this.readFromVps(videoId, settings, meta, tempContext, force, alive);
+        } else if (mode === 'auto') {
+          const info = await LT.YouTube.captionTracks();
+          if (!alive()) return null;
+          const human = info && info.tracks && info.tracks.some(
+            t => t.kind !== 'asr' && (settings.sourceLang === 'auto' || langBase(t.languageCode) === langBase(settings.sourceLang))
+          );
+          if (human || !settings.videoAsrBaseUrl) read = await this.readTrack(videoId, settings, alive);
+          else read = await this.readFromVps(videoId, settings, meta, tempContext, force, alive);
+        } else {
+          read = await this.readTrack(videoId, settings, alive);
+        }
         if (!read) return null;
         ({ units, trackKey, trackLabel, isAsr } = read);
       }
       const sourceHash = LT.SubsCache.fingerprint(pack(units));
       if (cachedMeta && cachedMeta.sourceHash && cachedMeta.sourceHash !== sourceHash) cachedMeta = null;
-      return { cachedMeta, units, trackKey, trackLabel, isAsr, sourceHash };
+      return { cachedMeta, units, trackKey, trackLabel, isAsr, sourceHash, sourceKind: String(trackKey).startsWith('vps|') ? 'vps' : 'youtube' };
+    }
+
+    buildVpsContext(settings, meta, tempContext) {
+      if (!settings.videoAsrSendContext) return '';
+      const parts = [];
+      if (settings.useMetadata && meta && LT.Prompt?.formatMetadata) {
+        const metaText = LT.Prompt.formatMetadata(meta, Math.min(Number(settings.metadataLimit) || 1000, 1000));
+        if (metaText) parts.push(metaText);
+      }
+      if (settings.manualContext && String(settings.manualContext).trim()) {
+        parts.push(String(settings.manualContext).trim());
+      }
+      if (tempContext && String(tempContext).trim()) {
+        parts.push(String(tempContext).trim());
+      }
+      return parts.join('\n\n').slice(0, 1500);
+    }
+
+    async readFromVps(videoId, settings, meta, tempContext, force, alive) {
+      this.phase = 'downloading';
+      this.stage = '正在连接 VPS 转写服务…';
+      this.progress = 0;
+      this.sourceKind = 'vps';
+      this.note(`流译：${this.stage}`, 'warn', false);
+      this.emit();
+
+      const controller = new AbortController();
+      this.controllers.add(controller);
+      try {
+        const context = this.buildVpsContext(settings, meta, tempContext) || undefined;
+        const pageUrl = typeof location !== 'undefined' && location.href
+          ? location.href
+          : `https://www.youtube.com/watch?v=${videoId}`;
+        const result = await LT.VpsAsr.transcribe({
+          baseUrl: settings.videoAsrBaseUrl,
+          token: settings.videoAsrToken,
+          videoId,
+          url: pageUrl,
+          sourceLang: settings.sourceLang,
+          model: settings.videoAsrModel,
+          context,
+          force,
+          signal: controller.signal,
+          onProgress: p => {
+            if (!alive()) return;
+            const rawPct = Number(p.progress) || 0;
+            const pct = rawPct > 0 && rawPct < 1 ? Math.round(rawPct * 100) : Math.round(rawPct);
+            this.progress = Math.max(0, Math.min(100, pct));
+            this.stage = p.stage || '';
+            this.phase = p.status === 'queued' || p.status === 'downloading' ? 'downloading' : 'transcribing';
+            this.note(`流译：${this.stage || (this.phase === 'downloading' ? 'VPS 下载音频中…' : `VPS 转写中 ${this.progress}%`)}`, 'warn', false);
+            this.emit();
+          },
+        });
+        if (!alive()) return null;
+        const usedModel = result.model || settings.videoAsrModel || 'default';
+        const modelLabel = (Array.isArray(settings.videoAsrModels)
+          ? settings.videoAsrModels.find(item => item.id === usedModel)?.label
+          : '') || usedModel;
+        const lang = result.lang || settings.sourceLang || 'auto';
+        const trackKey = `vps|${lang}|${usedModel}`;
+        const trackLabel = `VPS 转写 · ${modelLabel}`;
+        const units = result.units;
+        await LT.SubsCache.setSource(videoId, trackKey, {
+          videoId,
+          trackKey,
+          lang,
+          isAsr: false,
+          sourceKind: 'vps',
+          model: usedModel,
+          segVersion: LT.SUBS.SEG_VERSION,
+          units: pack(units),
+        }).catch(err => {
+          if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
+        });
+        if (!alive()) return null;
+        this.progress = 100;
+        this.stage = 'VPS 转写完成';
+        this.emit();
+        return { units, trackKey, trackLabel, isAsr: false, sourceKind: 'vps' };
+      } finally {
+        this.controllers.delete(controller);
+      }
     }
 
     buildPromptAndFingerprint({ settings, meta, tempContext, config }, { isAsr, trackKey, sourceHash }) {
@@ -399,7 +512,7 @@ globalThis.LT = globalThis.LT || {};
 
     async restoreChunks({ videoId, settings, meta, force, gen, config }, source, { scene, system, fp }, alive) {
       let { cachedMeta } = source;
-      const { units, trackKey, trackLabel, isAsr, sourceHash } = source;
+      const { units, trackKey, trackLabel, isAsr, sourceHash, sourceKind } = source;
       const requireModel = () => {
         if (!LT.TextModel.hasCredentials(config)) throw new Error('未配置 API Key 或鉴权请求头，请在扩展设置里填写');
         if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
@@ -458,6 +571,7 @@ globalThis.LT = globalThis.LT || {};
         trackKey,
         trackLabel,
         isAsr,
+        sourceKind: sourceKind || (String(trackKey).startsWith('vps|') ? 'vps' : 'youtube'),
         config,
         system,
         staleConfig: false,

@@ -1,5 +1,5 @@
 /**
- * 文字翻译模型客户端：Gemini generateContent 与 OpenAI 兼容 chat/completions。
+ * 文字翻译模型客户端：Gemini generateContent、OpenAI 兼容 chat/completions 与 Claude（Anthropic Messages）。
  * 只负责一次请求：拼请求、发出去、把流式响应合成完整文本和结束原因。重试与分块在 video-subs.js。
  * 另外提供设置页用的三件事：查模型信息（不花额度）、列出可用模型、按翻译的完整路径做一次生成测试。
  */
@@ -26,7 +26,7 @@ globalThis.LT = globalThis.LT || {};
   function resolve(settings, providerId, selectedModel) {
     const p = LT.Settings.provider(settings, providerId);
     if (p.enabled === false) throw new Error(`提供商「${p.name || p.id}」已停用，请在设置中启用或选择其他提供商`);
-    const apiType = p.apiType === 'openai' ? 'openai' : 'gemini';
+    const apiType = LT.Settings.textApiType(p.apiType);
     const baseUrl = String(p.baseUrl || LT.TEXT_DEFAULT_BASE[apiType]).replace(/\/+$/, '');
     let key = String(p.apiKey || '').trim();
     let keySource = 'provider';
@@ -55,8 +55,14 @@ globalThis.LT = globalThis.LT || {};
   /** 自定义请求头覆盖同名默认头，所有查询和生成共用这一份鉴权。 */
   function requestHeaders(config, json = false) {
     const headers = json ? { 'content-type': 'application/json' } : {};
+    if (config.apiType === 'anthropic') {
+      headers['anthropic-version'] = '2023-06-01';
+      // 内容脚本从 YouTube 页面直连时，Anthropic 要求显式声明才放行跨域。
+      headers['anthropic-dangerous-direct-browser-access'] = 'true';
+    }
     if (config.key) {
       if (config.apiType === 'openai') headers.authorization = `Bearer ${config.key}`;
+      else if (config.apiType === 'anthropic') headers['x-api-key'] = config.key;
       else headers['x-goog-api-key'] = config.key;
     }
     return { ...headers, ...config.headers };
@@ -78,6 +84,20 @@ globalThis.LT = globalThis.LT || {};
         }),
       };
     }
+    if (config.apiType === 'anthropic') {
+      // 较新的 Claude 模型拒绝非默认采样参数，这里不传 temperature。
+      return {
+        url: `${config.baseUrl}/v1/messages`,
+        headers: requestHeaders(config, true),
+        body: JSON.stringify({
+          model: config.model,
+          max_tokens: 8192,
+          system,
+          messages: [{ role: 'user', content: user }],
+          stream: true,
+        }),
+      };
+    }
     return {
       url: `${config.baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:streamGenerateContent?alt=sse`,
       headers: requestHeaders(config, true),
@@ -89,10 +109,11 @@ globalThis.LT = globalThis.LT || {};
     };
   }
 
-  /** 把流式事件合成文本；Gemini 与 OpenAI 的事件结构不同，其他兼容接口按 OpenAI 处理。 */
+  /** 把流式事件合成文本；三种协议的事件结构不同，其他兼容接口按 OpenAI 处理。 */
   function collect(apiType, events) {
     let text = '';
     let finishReason = '';
+    let error = '';
     for (const ev of events) {
       if (!ev || typeof ev !== 'object') continue;
       if (apiType === 'openai') {
@@ -101,6 +122,14 @@ globalThis.LT = globalThis.LT || {};
         const delta = choice.delta || choice.message || {};
         if (typeof delta.content === 'string') text += delta.content;
         if (choice.finish_reason) finishReason = choice.finish_reason;
+      } else if (apiType === 'anthropic') {
+        // 流式只取 text_delta，跳过思考块；非流式响应是一整个 message 对象。
+        if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') text += ev.delta.text || '';
+        else if (ev.type === 'message_delta' && ev.delta && ev.delta.stop_reason) finishReason = ev.delta.stop_reason;
+        else if (ev.type === 'message' && Array.isArray(ev.content)) {
+          for (const block of ev.content) if (block && block.type === 'text') text += block.text || '';
+          if (ev.stop_reason) finishReason = ev.stop_reason;
+        } else if (ev.type === 'error') error = (ev.error && (ev.error.message || ev.error.type)) || '流式响应中断';
       } else {
         const cand = Array.isArray(ev.candidates) ? ev.candidates[0] : null;
         if (!cand) continue;
@@ -109,7 +138,7 @@ globalThis.LT = globalThis.LT || {};
         if (cand.finishReason) finishReason = cand.finishReason;
       }
     }
-    return { text, finishReason };
+    return { text, finishReason, error };
   }
 
   function parseRetryAfter(header, body) {
@@ -134,6 +163,7 @@ globalThis.LT = globalThis.LT || {};
     else if (status === 404) hint = '模型名不存在或接口地址不对';
     else if (status === 429) hint = '触发限流';
     else if (status === 400) hint = '请求被拒绝';
+    else if (status === 529) hint = '服务过载';
     return detail ? `${hint}：${detail}` : hint;
   }
 
@@ -163,6 +193,8 @@ globalThis.LT = globalThis.LT || {};
       throw new RequestError(errorMessage(res.status, res.text), { status: res.status, retryAfterMs, fatal });
     }
     const out = collect(config.apiType, LT.Net.parseSse(res.text));
+    // Claude 可能在 HTTP 200 后的流里报错（如过载），此时文本不完整，按可重试处理。
+    if (out.error) throw new RequestError(`流式响应中断：${out.error}`, { status: res.status });
     if (!out.text.trim()) throw new RequestError('模型没有返回内容', { status: res.status });
     return { text: out.text, finishReason: out.finishReason, via: res.via };
   }
@@ -177,7 +209,7 @@ globalThis.LT = globalThis.LT || {};
     } catch (_) {
       return [];
     }
-    if (apiType === 'openai') {
+    if (apiType === 'openai' || apiType === 'anthropic') {
       return (Array.isArray(o && o.data) ? o.data : [])
         .map((m) => m && m.id)
         .filter((id) => typeof id === 'string' && id);
@@ -189,9 +221,9 @@ globalThis.LT = globalThis.LT || {};
   }
 
   function listRequest(config) {
-    return config.apiType === 'openai'
-      ? { url: `${config.baseUrl}/models`, headers: requestHeaders(config) }
-      : { url: `${config.baseUrl}/v1beta/models?pageSize=200`, headers: requestHeaders(config) };
+    if (config.apiType === 'openai') return { url: `${config.baseUrl}/models`, headers: requestHeaders(config) };
+    if (config.apiType === 'anthropic') return { url: `${config.baseUrl}/v1/models?limit=1000`, headers: requestHeaders(config) };
+    return { url: `${config.baseUrl}/v1beta/models?pageSize=200`, headers: requestHeaders(config) };
   }
 
   /** 列出账号实际可用的模型名。 */

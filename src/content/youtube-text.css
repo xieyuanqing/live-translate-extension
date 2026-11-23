@@ -1,8 +1,12 @@
 /* 译文融入原文排版；所有规则只作用于插件节点。 */
 .lt-yt-text {
   --lt-yt-action-color: #065fd4;
+  --lt-yt-action-bg: rgba(6, 95, 212, 0.08);
+  --lt-yt-action-hover: rgba(6, 95, 212, 0.14);
+  --lt-yt-pill-bg: rgba(0, 0, 0, 0.05);
+  --lt-yt-pill-hover: rgba(0, 0, 0, 0.09);
   --lt-yt-secondary-color: #606060;
-  --lt-yt-disabled-color: #757575;
+  --lt-yt-disabled-color: #909090;
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
@@ -13,56 +17,89 @@
 }
 /* 网页主题由 YouTube 的 html[dark] 决定，独立于扩展弹窗主题。 */
 html[dark] .lt-yt-text, .text-style-preview[data-theme='dark'] .lt-yt-text {
-  --lt-yt-action-color: #8ab4f8;
+  --lt-yt-action-color: #3ea6ff;
+  --lt-yt-action-bg: rgba(62, 166, 255, 0.13);
+  --lt-yt-action-hover: rgba(62, 166, 255, 0.22);
+  --lt-yt-pill-bg: rgba(255, 255, 255, 0.09);
+  --lt-yt-pill-hover: rgba(255, 255, 255, 0.16);
   --lt-yt-secondary-color: #aaaaaa;
-  --lt-yt-disabled-color: #909090;
+  --lt-yt-disabled-color: #717171;
 }
 .lt-yt-text button {
   appearance: none;
   font: inherit;
   font-size: 12px;
-  line-height: 1.5;
+  font-weight: 500;
+  line-height: 1.45;
   color: var(--lt-yt-action-color);
   border: 0;
-  border-radius: 3px;
-  padding: 0;
-  background: transparent;
+  border-radius: 12px;
+  padding: 2px 9px;
+  background: var(--lt-yt-action-bg);
   cursor: pointer;
+  text-decoration: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.lt-yt-text button:hover { text-decoration: underline; }
-.lt-yt-text button:disabled { color: var(--lt-yt-disabled-color); cursor: default; text-decoration: none; }
-.lt-yt-text button:focus-visible { outline: 2px solid var(--lt-yt-action-color); outline-offset: 3px; }
+.lt-yt-text button:hover:not(:disabled) { background: var(--lt-yt-action-hover); text-decoration: none; }
+.lt-yt-text button:disabled { color: var(--lt-yt-disabled-color); background: var(--lt-yt-pill-bg); opacity: 0.7; cursor: default; text-decoration: none; }
+.lt-yt-text button:focus-visible { outline: 2px solid var(--lt-yt-action-color); outline-offset: 2px; }
 .lt-yt-text [hidden] { display: none !important; }
-.lt-yt-text-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.lt-yt-text-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 2px; }
+.lt-yt-text-actions button + button {
+  background: var(--lt-yt-pill-bg);
+  color: var(--lt-yt-secondary-color);
+}
+.lt-yt-text-actions button + button:hover:not(:disabled) {
+  background: var(--lt-yt-pill-hover);
+  color: inherit;
+}
 .lt-yt-text-actions [role='status'] { color: var(--lt-yt-secondary-color); font-size: 12px; }
 .lt-yt-text-actions [role='status']:empty { display: none; }
 .lt-yt-comment { display: block; margin: 6px 0 8px; color: var(--lt-yt-source-color, inherit); }
 .lt-yt-text-result {
   display: block;
   white-space: pre-wrap;
-  margin: 0 0 6px;
+  margin: 4px 0 6px;
   padding: 0;
   border: 0;
   user-select: text;
 }
+.lt-yt-comment > .lt-yt-text-result[data-lt-style='plain'] {
+  border-inline-start: 2.5px solid color-mix(in srgb, var(--lt-yt-action-color) 42%, transparent);
+  padding-inline-start: 9px;
+}
 .lt-yt-comment-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 16px;
-  align-items: baseline;
-  margin: 12px 0;
+  gap: 8px 10px;
+  align-items: center;
+  margin: 10px 0 14px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--lt-yt-secondary-color);
 }
+.lt-yt-comment-toolbar button {
+  padding: 5px 13px;
+  border-radius: 16px;
+  font-size: 12.5px;
+}
+.lt-yt-comment-toolbar button + button {
+  background: var(--lt-yt-pill-bg);
+  color: var(--lt-yt-secondary-color);
+}
+.lt-yt-comment-toolbar button + button:hover:not(:disabled) {
+  background: var(--lt-yt-pill-hover);
+  color: inherit;
+}
 .lt-yt-comment-toolbar [role='status'] { color: var(--lt-yt-secondary-color); }
+.lt-yt-comment-toolbar [role='status']:empty { display: none; }
 .lt-yt-chat-result {
   display: block;
   white-space: pre-wrap;
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   padding: 0;
   border: 0;
-  opacity: 1;
+  opacity: 0.94;
   user-select: text;
 }
 

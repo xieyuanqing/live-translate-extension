@@ -144,6 +144,7 @@ globalThis.LT = globalThis.LT || {};
       ...(String(settings.apiKeys || '').split(',')),
       settings.qwenApiKey,
       settings.ttsGeminiApiKey,
+      settings.videoAsrToken,
       ...(settings.providers || []).flatMap((p) => String(p.apiKey || '').split(',')),
       ...(settings.providers || []).flatMap((p) => Object.values(p.headers || {})),
     ].map((x) => String(x || '').trim()).filter(Boolean);

@@ -127,7 +127,7 @@ globalThis.LT = globalThis.LT || {};
     return { ok: missing.length === 0, missing, extra };
   }
 
-  const TRUNCATED_REASONS = new Set(['MAX_TOKENS', 'LENGTH', 'length']);
+  const TRUNCATED_REASONS = new Set(['MAX_TOKENS', 'LENGTH', 'length', 'max_tokens']);
 
   /** 结束原因是长度上限，或者缺的正好是结尾一段，都按截断处理：拆小块重来，而不是原样重试。 */
   function looksTruncated(finishReason, missing, units) {

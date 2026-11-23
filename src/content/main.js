@@ -37,11 +37,22 @@ globalThis.LT = globalThis.LT || {};
           userStoppedFor = currentVideoId;
           stop();
         }
-      } else if (videoStartPending || ['reading', 'translating'].includes(videoSubs.status().phase)) {
+      } else if (videoStartPending || ['reading', 'downloading', 'transcribing', 'translating'].includes(videoSubs.status().phase)) {
         cancelVideoSubs();
       } else if (videoSubs.status().phase !== 'ready') {
         startVideoSubs(false);
       }
+    },
+    onRetranslate: () => {
+      if (!LT.YouTube.isWatchPage() || currentVideoId !== LT.YouTube.videoIdFromUrl()) return;
+      if (session.phase === 'idle' && !currentMeta?.isLive) startVideoSubs(true);
+    },
+    onUpdateSettings: (patch) => {
+      settings = LT.Settings.normalize({ ...settings, ...patch });
+      caption.applySettings(settings);
+      videoSubs.updateSettings(settings);
+      pushStatus();
+      LT.Settings.save?.(patch);
     },
   });
 
@@ -96,6 +107,9 @@ globalThis.LT = globalThis.LT || {};
       isLive: currentMeta ? currentMeta.isLive : false,
       modeKnown: (currentMeta?.videoId === currentVideoId) || session.phase !== 'idle',
       liveCaptionsVisible,
+      captionScale: settings.captionScale,
+      captionBottom: settings.captionBottom,
+      captionDisplayMode: settings.captionDisplayMode,
       liveProvider: session.snapshot ? session.snapshot.provider : settings.liveProvider,
       contextStatus: session.snapshot ? session.snapshot.contextStatus : '',
       generatedTerms: session.snapshot ? session.snapshot.generatedTerms : 0,
@@ -172,14 +186,15 @@ globalThis.LT = globalThis.LT || {};
     return JSON.stringify([LT.YouTube.videoIdFromUrl(), config, meta, notes]);
   }
 
-  async function prepareContext(runSettings, meta, notes, debugLog = LT.LiveLog.NOOP) {
+  async function prepareContext(runSettings, meta, notes, debugLog = LT.LiveLog.NOOP, opts = {}) {
     const provider = runSettings.liveProvider === 'qwen' ? 'qwen' : 'gemini';
+    const videoId = meta?.videoId || LT.YouTube.videoIdFromUrl();
     const metadataText = runSettings.useMetadata ? LT.Prompt.formatMetadata(meta, runSettings.metadataLimit) : '';
     const userNotes = [runSettings.manualContext, notes].filter(Boolean).join('\n');
     const key = contextKey(runSettings, meta, notes);
     const cached = previewCache;
     previewCache = null; // 同一份预览只用于接下来的一次启动。
-    if (cached && cached.key === key) {
+    if (!opts.force && cached && cached.key === key) {
       const result = cached.result;
       debugLog.event('context_result', { result: result.review.contextStatus, reusedPreview: true, ms: 0, terms: Object.keys(result.generated?.phrases || {}).length });
       return result;
@@ -189,36 +204,60 @@ globalThis.LT = globalThis.LT || {};
     let contextError = '';
     let generatorModel = '';
     let generatorProvider = '';
+    let reusedCache = false;
+    let cacheEntry = null;
     const contextTimeoutSeconds = LT.LiveContext.timeoutMs(runSettings) / 1000;
     const generatorRequest = metadataText && runSettings.generateLiveContext ? LT.LiveContext.buildRequest(runSettings, metadataText, userNotes) : null;
     debugLog.event('context_start', { enabled: !!generatorRequest, metadataChars: metadataText.length,
       providerId: runSettings.liveContextProviderId, timeoutSeconds: contextTimeoutSeconds });
     if (generatorRequest) {
-      const started = Date.now();
-      try {
-        const config = LT.TextModel?.resolve?.(runSettings, runSettings.liveContextProviderId, runSettings.liveContextModel);
-        generatorModel = config?.model || '';
-        generatorProvider = config?.name || '';
-        generated = LT.LiveContext.preserveIdentity(await LT.LiveContext.generate(runSettings, metadataText, userNotes), meta);
-        contextStatus = generated ? 'generated' : 'unavailable';
-      } catch (err) {
-        contextStatus = 'error';
-        contextError = err && err.message || '背景整理失败';
-        console.warn('[流译] 本场背景整理失败，继续使用基础配置', contextError);
+      const config = LT.TextModel?.resolve?.(runSettings, runSettings.liveContextProviderId, runSettings.liveContextModel);
+      generatorModel = config?.model || '';
+      generatorProvider = config?.name || '';
+      const persistKey = LT.LiveContext.cacheKey?.({
+        videoId,
+        settings: runSettings,
+        metadataText,
+        notes: userNotes,
+        model: generatorModel,
+      }) || '';
+      const hit = !opts.force && persistKey ? await LT.LiveContext.getCached?.(persistKey) : null;
+      if (hit?.generated) {
+        generated = LT.LiveContext.preserveIdentity(hit.generated, meta);
+        generatorModel = hit.generatorModel || generatorModel;
+        generatorProvider = hit.generatorProvider || generatorProvider;
+        contextStatus = 'generated';
+        reusedCache = true;
+        debugLog.event('context_result', { result: contextStatus, reusedCache: true, ms: 0,
+          model: generatorModel, timeoutSeconds: contextTimeoutSeconds, terms: Object.keys(generated?.phrases || {}).length, error: '' });
+      } else {
+        opts.onGenerating?.();
+        const started = Date.now();
+        try {
+          generated = LT.LiveContext.preserveIdentity(await LT.LiveContext.generate(runSettings, metadataText, userNotes), meta);
+          contextStatus = generated ? 'generated' : 'unavailable';
+          if (generated && persistKey) {
+            cacheEntry = { key: persistKey, generated, generatorModel, generatorProvider };
+          }
+        } catch (err) {
+          contextStatus = 'error';
+          contextError = err && err.message || '背景整理失败';
+          console.warn('[流译] 本场背景整理失败，继续使用基础配置', contextError);
+        }
+        debugLog.event('context_result', { result: contextStatus, ms: Date.now() - started,
+          model: generatorModel, timeoutSeconds: contextTimeoutSeconds, terms: Object.keys(generated?.phrases || {}).length, error: contextError });
       }
-      debugLog.event('context_result', { result: contextStatus, ms: Date.now() - started,
-        model: generatorModel, timeoutSeconds: contextTimeoutSeconds, terms: Object.keys(generated?.phrases || {}).length, error: contextError });
     }
     const prompt = LT.Prompt.build({ sourceLang: runSettings.sourceLang, targetLang: runSettings.targetLang,
       metadataText: generated ? '' : metadataText, generatedContext: LT.LiveContext.asPromptContext(generated),
       manualContext: runSettings.manualContext, tempContext: notes });
     const review = {
-      provider, videoId: meta?.videoId || LT.YouTube.videoIdFromUrl(), sourceLang: runSettings.sourceLang,
-      targetLang: runSettings.targetLang, contextStatus, contextError,
+      provider, videoId, sourceLang: runSettings.sourceLang,
+      targetLang: runSettings.targetLang, contextStatus, contextError, reusedCache,
       generated, generatorRequest, generatorModel, generatorProvider, contextTimeoutSeconds, prompt: provider === 'gemini' ? prompt : '',
       translation: provider === 'qwen' ? LT.LiveContext.translationConfig(runSettings.targetLang, generated?.phrases || {}) : null,
     };
-    return { key, metadataText, prompt, generated, review };
+    return { key, metadataText, prompt, generated, review, cacheEntry };
   }
 
   function saveReview(review, runSettings, phase) {
@@ -252,9 +291,10 @@ globalThis.LT = globalThis.LT || {};
       let meta = currentMeta;
       if (runSettings.useMetadata && (!meta || meta.videoId !== videoId)) meta = await LT.YouTube.waitForMeta({ videoId, tries: 4 });
       if (!isCurrent()) throw new Error('预览已取消');
-      const result = await prepareContext(runSettings, meta, notes);
+      const result = await prepareContext(runSettings, meta, notes, LT.LiveLog.NOOP, { force: true });
       if (!isCurrent()) throw new Error('预览已取消');
       if (meta) currentMeta = meta;
+      if (result.cacheEntry) LT.LiveContext.setCached?.(result.cacheEntry.key, result.cacheEntry);
       previewCache = { key: result.key, result };
       saveReview(result.review, runSettings, 'preview');
       return { ok: true, review: liveReview };
@@ -320,11 +360,19 @@ globalThis.LT = globalThis.LT || {};
     }
     // 等待期间设置页可能发来新配置，本场继续使用启动时读取的那一份。
     session.debugLog.details({ metadata: meta, manualContext: runSettings.manualContext, tempContext: runTempContext });
-    if (runSettings.generateLiveContext && runSettings.useMetadata && meta) {
-      caption.setStatus(`流译：整理本场背景和术语…（最多等待 ${LT.LiveContext.timeoutMs(runSettings) / 1000} 秒）`, 'warn', false);
-    }
-    const { metadataText, prompt, generated, review } = await prepareContext(runSettings, meta, runTempContext, session.debugLog);
+    const { metadataText, prompt, generated, review, cacheEntry } = await prepareContext(
+      runSettings,
+      meta,
+      runTempContext,
+      session.debugLog,
+      {
+        onGenerating: () => {
+          caption.setStatus(`流译：整理本场背景和术语…（最多等待 ${LT.LiveContext.timeoutMs(runSettings) / 1000} 秒）`, 'warn', false);
+        },
+      }
+    );
     if (!isCurrent()) return null;
+    if (cacheEntry) LT.LiveContext.setCached?.(cacheEntry.key, cacheEntry);
     saveReview(review, runSettings, 'session');
     session.debugLog.details({ generatedContext: generated, generatorRequest: review.generatorRequest,
       generatorModel: review.generatorModel, generatorProvider: review.generatorProvider,
@@ -691,7 +739,7 @@ globalThis.LT = globalThis.LT || {};
 
   /** 整片字幕：读取当前设置作为本次任务的快照；正在实时翻译就先停掉。 */
   async function startVideoSubs(force) {
-    if (videoStartPending || ['reading', 'translating'].includes(videoSubs.status().phase)) return;
+    if (videoStartPending || ['reading', 'downloading', 'transcribing', 'translating'].includes(videoSubs.status().phase)) return;
     const videoId = LT.YouTube.videoIdFromUrl();
     if (!videoId || !LT.YouTube.isWatchPage() || (currentMeta?.videoId === videoId && currentMeta.isLive)) return;
     stop('switch_to_subtitles');

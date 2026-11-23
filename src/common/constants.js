@@ -77,50 +77,15 @@ globalThis.LT = globalThis.LT || {};
     (LT.TARGET_LANGS.find((l) => l.code === code) || { label: code }).label;
 
   // ---------- 场景库初始模板 ----------
-  // 只用于首次初始化和「恢复默认」，运行时真源是 chrome.storage 里的 scenes。
+  // ---------- 整片字幕通用提示词默认模板 ----------
+  // 运行时真源是 chrome.storage 里的 scenes[0]，供用户在「整片字幕」页直接编辑或恢复默认。
   LT.DEFAULT_SCENES = [
-    {
-      id: 'vtuber',
-      label: 'VTuber',
-      instruction:
-        '这是 VTuber 直播。优先使用圈内常见的人名、组合名和直播术语译法；' +
-        '保留主播的口癖和语气，观众称呼按上下文自然翻译；不确定的专名保留原文。',
-    },
-    {
-      id: 'livestream',
-      label: '通用直播',
-      instruction:
-        '这是实时直播。适应口语、省略、互动和话题跳转，弹幕或观众称呼按上下文自然翻译。',
-    },
-    {
-      id: 'game',
-      label: '游戏实况',
-      instruction:
-        '这是游戏直播。准确处理游戏名、角色、技能、道具、地图和机制术语，保留玩家口语节奏。',
-    },
-    {
-      id: 'talk',
-      label: '杂谈 / 电台',
-      instruction:
-        '这是杂谈或聊天直播。以自然口语为主，保留玩笑、吐槽和语气词的味道，不要书面化。',
-    },
-    {
-      id: 'music',
-      label: '歌回 / 音乐',
-      instruction:
-        '这是歌回或音乐直播。歌曲演唱部分可以直译歌词大意，间隙的说话部分按日常口语翻译；' +
-        '曲名和歌手名优先使用通行译名，不确定就保留原文。',
-    },
-    {
-      id: 'news',
-      label: '新闻 / 发布会',
-      instruction:
-        '这是新闻或发布会内容。保持客观和信息密度，准确翻译人名、地名、机构、数字、日期与引语。',
-    },
     {
       id: 'general',
       label: '通用',
-      instruction: '适用于一般视频内容。保持前后字幕连贯，准确处理标题、人物、组织和主题词。',
+      instruction:
+        '结合视频标题、简介和前后文字幕自动判断内容题材（如直播杂谈、VTuber、游戏实况、歌回音乐、新闻发布会或教程评测），' +
+        '自适应口语节奏或专业语气；优先使用圈内或行业通行译名，不确定的专名保留原文。',
     },
   ];
 
@@ -164,7 +129,7 @@ globalThis.LT = globalThis.LT || {};
 
     sourceLang: 'ja',
     targetLang: 'zh',
-    sceneId: 'vtuber',
+    sceneId: 'general',
     scenes: LT.DEFAULT_SCENES,
 
     autoStartLive: true, // 打开直播页自动开始
@@ -192,7 +157,7 @@ globalThis.LT = globalThis.LT || {};
     pauseOnAd: true,
 
     // ---- 文字接口仅保存连接和模型目录；每项功能单独保存所用模型 ----
-    // 每套：{ id, name, apiType: gemini | openai, baseUrl（空用官方地址）, apiKey（Gemini 空则复用 Live Key）,
+    // 每套：{ id, name, apiType: gemini | openai | anthropic, baseUrl（空用官方地址）, apiKey（Gemini 空则复用 Live Key）,
     //        models（可用模型 ID 目录）, concurrency（并发请求数）, requestPath: auto | direct | relay }
     providers: [
       { id: 'p-default', name: '', kind: 'text', preset: 'custom', apiType: 'openai', baseUrl: '', apiKey: '', models: [], concurrency: 3, requestPath: 'auto' },
@@ -201,7 +166,37 @@ globalThis.LT = globalThis.LT || {};
     subsModel: '',
     autoShowCached: true, // 打开已翻译过的视频时自动显示缓存字幕
     subsExtraInstruction: '', // 只对整片字幕有意义的附加指令（错听规律、术语表），进系统提示词和缓存指纹
+
+    // ---- 视频翻译：步骤 1 原文获取与自建 VPS 云端音频转写（方案一） ----
+    videoTranscriptMode: 'auto', // auto（人工字幕优先，无则 VPS）| vps（始终 VPS）| youtube（仅 YouTube 字幕轨）
+    videoAsrBaseUrl: '', // 自建 VPS 转写服务地址，如 https://asr.example.com
+    videoAsrToken: '', // Bearer 访问令牌；明文存在本机，默认备份自动剔除
+    videoAsrModel: '', // 选用的后端转写模型 ID（留空则使用 VPS 默认模型）
+    videoAsrModels: [], // 最近一次从 VPS /api/models 同步到的模型清单 [{ id, label, provider, description }]
+    videoAsrSendContext: true, // 提交转写时附带视频标题、简介与长期背景，辅助专名识别
   };
+
+  // ---------- 视频翻译原文获取策略 ----------
+  LT.VIDEO_TRANSCRIPT_MODES = [
+    {
+      code: 'auto',
+      label: '智能优先',
+      badge: '推荐',
+      description: '优先使用人工字幕轨；仅自动字幕或无字幕时，交由 VPS 云端转写音频。',
+    },
+    {
+      code: 'vps',
+      label: '强制云端转写',
+      badge: '高精',
+      description: '跳过 YouTube 自带字幕，始终把视频链接发给 VPS 下载音频并转写。',
+    },
+    {
+      code: 'youtube',
+      label: '仅 YouTube 字幕',
+      badge: '传统',
+      description: '只读取 YouTube 自带字幕轨（含自动字幕），不连接 VPS 服务。',
+    },
+  ];
 
   // ---------- 字幕外观 ----------
   LT.CAPTION_DISPLAY_MODES = [
@@ -229,11 +224,13 @@ globalThis.LT = globalThis.LT || {};
   LT.TEXT_API_TYPES = [
     { code: 'openai', label: 'OpenAI 兼容 chat/completions' },
     { code: 'gemini', label: 'Gemini generateContent' },
+    { code: 'anthropic', label: 'Claude（Anthropic Messages）' },
   ];
   // 提供商身份与请求协议分开；各功能引用配置 id，待接入项只出现在添加列表。
   LT.PROVIDER_PRESETS = [
     { code: 'openai', label: 'OpenAI', kind: 'text', apiType: 'openai', baseUrl: 'https://api.openai.com/v1', group: 'llm' },
     { code: 'deepseek', label: 'DeepSeek', kind: 'text', apiType: 'openai', baseUrl: 'https://api.deepseek.com', group: 'llm' },
+    { code: 'anthropic', label: 'Claude', kind: 'text', apiType: 'anthropic', baseUrl: 'https://api.anthropic.com', group: 'llm' },
     { code: 'gemini', label: 'Gemini', kind: 'text', apiType: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', group: 'llm' },
     { code: 'bailian', label: '阿里百炼（北京）', kind: 'text', apiType: 'openai', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', group: 'llm' },
     { code: 'bailian-intl', label: '阿里百炼（新加坡）', kind: 'text', apiType: 'openai', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', group: 'llm' },
@@ -250,6 +247,7 @@ globalThis.LT = globalThis.LT || {};
   LT.TEXT_DEFAULT_BASE = {
     gemini: 'https://generativelanguage.googleapis.com',
     openai: 'https://api.openai.com/v1',
+    anthropic: 'https://api.anthropic.com',
   };
   LT.TEXT_REQUEST_PATHS = [
     { code: 'auto', label: '自动（先直连，失败改后台转发）' },

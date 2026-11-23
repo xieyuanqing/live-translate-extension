@@ -552,8 +552,12 @@ console.log('\n[9] 缓存指纹、字幕提示词与设置');
     '模型列表解析',
     JSON.stringify(LT.TextModel.modelIds('gemini', geminiList)) === '["a"]' &&
       JSON.stringify(LT.TextModel.modelIds('openai', '{"data":[{"id":"x"},{"id":"y"}]}')) === '["x","y"]' &&
-      LT.TextModel.modelIds('openai', 'nope').length === 0
+      LT.TextModel.modelIds('openai', 'nope').length === 0 &&
+      JSON.stringify(LT.TextModel.modelIds('anthropic', '{"data":[{"id":"claude-a","type":"model"}],"has_more":false}')) === '["claude-a"]'
   );
+  const claude = LT.Settings.normalizeProvider({ preset: 'custom', apiType: 'anthropic' });
+  const legacy = LT.Settings.normalizeProvider({ apiType: 'nope' });
+  check('自定义接口保留 Claude 协议，未知协议按 Gemini', claude.apiType === 'anthropic' && legacy.apiType === 'gemini');
 }
 
 // ---------- 10. 文字模型请求与流式解析 ----------
@@ -581,6 +585,25 @@ console.log('\n[10] 文字模型请求与流式解析');
   const plain = LT.Net.parseSse('{"candidates":[{"content":{"parts":[{"text":"x"}]}}]}');
   check('非流式 JSON 也能解析', plain.length === 1 && LT.TextModel.collect('gemini', plain).text === 'x');
   check('半截流不抛错', LT.Net.parseSse('data: {"choices":[{"delta":{"content":"a"}}]}\n\ndata: {"cho').length === 1);
+  const areq = LT.TextModel.buildRequest({ ...cfg, apiType: 'anthropic', baseUrl: 'https://api.anthropic.com' }, 'sys', 'user');
+  const abody = JSON.parse(areq.body);
+  check(
+    'Claude 请求',
+    areq.url === 'https://api.anthropic.com/v1/messages' && areq.headers['x-api-key'] === 'k' && areq.headers['anthropic-version'] &&
+      !areq.headers.authorization && abody.system === 'sys' && abody.messages[0].content === 'user' && abody.max_tokens > 0 && abody.stream === true
+  );
+  const asse =
+    'event: message_start\ndata: {"type":"message_start","message":{"content":[]}}\n\n' +
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"想"}}\n\n' +
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"1\\t甲"}}\n\n' +
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\n' +
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+  const a = LT.TextModel.collect('anthropic', LT.Net.parseSse(asse));
+  check('Claude 流式拼接、忽略思考并识别截断', a.text === '1\t甲' && a.finishReason === 'max_tokens' && LT.Chunker.looksTruncated(a.finishReason, [], []), JSON.stringify(a));
+  const aerr = LT.TextModel.collect('anthropic', LT.Net.parseSse('event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'));
+  check('Claude 流内错误被记录', aerr.error === 'Overloaded');
+  const aplain = LT.TextModel.collect('anthropic', LT.Net.parseSse('{"type":"message","content":[{"type":"text","text":"x"}],"stop_reason":"end_turn"}'));
+  check('Claude 非流式响应也能解析', aplain.text === 'x' && aplain.finishReason === 'end_turn');
 }
 
 console.log(failed === 0 ? '\n全部通过\n' : `\n${failed} 项失败\n`);

@@ -51,7 +51,9 @@
     .source-card { background:var(--source); }
     .target-card { background:var(--target); margin-top:8px; }
     .card-head { display:flex; align-items:center; min-height:28px; gap:4px; color:var(--muted); font-size:12px; }
-    .card-head .heading { flex:1; }
+    .card-head .heading { flex:1; font-weight:500; }
+    .rate-chip { border:0; border-radius:6px; background:transparent; color:var(--muted); padding:2px 6px; font-size:11.5px; font-variant-numeric:tabular-nums; transition:background-color .15s,color .15s; }
+    .rate-chip:hover:not(:disabled) { background:var(--hover); color:var(--fg); }
     .original,.result { white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
     .original { font-size:13px; line-height:1.5; max-height:7.5em; overflow:hidden; }
     .original.expanded { max-height:none; }
@@ -120,6 +122,8 @@
     session.resize?.disconnect();
     window.removeEventListener('resize', session.place);
     window.removeEventListener('scroll', session.place, true);
+    window.removeEventListener('pointerdown', session.outside, true);
+    window.removeEventListener('keydown', session.keydown, true);
     document.removeEventListener('fullscreenchange', session.fullscreen);
     try { session.port.disconnect(); } catch (_) { /* 已断开 */ }
     session.host.remove(); session = null;
@@ -161,8 +165,10 @@
     const sourceCard = node('section'); sourceCard.className = 'card source-card';
     const originalHead = node('div'); originalHead.className = 'card-head';
     const language = node('span', `原文 · ${S.language(message.text) === 'ja-JP' ? '日语' : '英语'}`); language.className = 'heading';
+    const rateBtn = node('button', '1.0x'); rateBtn.type = 'button'; rateBtn.className = 'rate-chip';
+    rateBtn.setAttribute('aria-label', '切换朗读语速'); rateBtn.title = '点击切换朗读语速'; rateBtn.disabled = true;
     const read = iconButton('sound', '朗读原文'); read.classList.add('speaker'); read.dataset.state = 'idle'; read.disabled = true;
-    originalHead.append(language, read);
+    originalHead.append(language, rateBtn, read);
     const original = node('div', message.text); original.className = 'original'; original.setAttribute('translate', 'no');
     const expand = node('button', '展开'); expand.type = 'button'; expand.className = 'expand'; expand.hidden = true;
     sourceCard.append(originalHead, original, expand);
@@ -198,7 +204,7 @@
     const current = { host, panel, port, speechId: 0, translationId: 0, heartbeat: null,
       speechState: 'idle', rate: 1, selectionRevision: 0, speechRevision: 0,
       choiceSave: Promise.resolve(), savedSpeechProvider: '', savedTranslationProviderId: '', savedTargetLang: '',
-      manual: false, place: null, fullscreen: null, resize: null, toastTimer: null };
+      manual: false, place: null, outside: null, keydown: null, fullscreen: null, resize: null, toastTimer: null };
     session = current;
     current.heartbeat = setInterval(() => { try { port.postMessage({ type: 'ping' }); } catch (_) { close(); } }, 10000);
     document.documentElement.append(host);
@@ -237,9 +243,17 @@
     const endDrag = event => { if (drag?.id === event.pointerId) drag = null; };
     header.addEventListener('pointerup', endDrag); header.addEventListener('pointercancel', endDrag);
     current.fullscreen = () => { (document.fullscreenElement || document.documentElement).append(host); current.place(); };
+    current.outside = event => {
+      if (current.manual) return;
+      if (event.target === host || event.composedPath?.().includes(host)) return;
+      close();
+    };
+    current.keydown = event => { if (event.key === 'Escape') close(); };
     const updateExpand = () => { expand.hidden = !original.classList.contains('expanded') && original.scrollHeight <= original.clientHeight + 1; };
     current.resize = new ResizeObserver(() => { current.place(); updateExpand(); }); current.resize.observe(panel);
     window.addEventListener('resize', current.place); window.addEventListener('scroll', current.place, true);
+    window.addEventListener('pointerdown', current.outside, true);
+    window.addEventListener('keydown', current.keydown, true);
     document.addEventListener('fullscreenchange', current.fullscreen);
     current.place();
     updateExpand();
@@ -260,6 +274,15 @@
       const label = ['preparing', 'playing'].includes(state) ? '停止朗读' : '朗读原文';
       read.setAttribute('aria-label', label); read.title = label;
     };
+    const formatRate = r => `${Number(r).toFixed(r % 1 === 0 ? 1 : 2).replace(/0$/, '')}x`;
+    const rates = [0.75, 0.9, 1, 1.15, 1.25];
+    rateBtn.addEventListener('click', () => {
+      const idx = rates.findIndex(r => Math.abs(r - current.rate) < 0.03);
+      current.rate = rates[(idx + 1) % rates.length];
+      rateBtn.textContent = formatRate(current.rate);
+      if (['preparing', 'playing'].includes(current.speechState)) post({ type: 'rate', rate: current.rate });
+      saveChoice({ ttsRate: current.rate }).catch(() => {});
+    });
     const speak = () => {
       if (['preparing', 'playing'].includes(current.speechState)) { post({ type: 'stop' }); setSpeechState('idle'); return; }
       current.speechId = ++sequence; setSpeechState('preparing');
@@ -290,7 +313,7 @@
     });
     port.onDisconnect.addListener(() => {
       clearInterval(current.heartbeat);
-      if (session === current) { showToast('连接已断开，请重新打开划词菜单', 3500); read.disabled = translate.disabled = true; }
+      if (session === current) { showToast('连接已断开，请重新打开划词菜单', 3500); read.disabled = rateBtn.disabled = translate.disabled = true; }
     });
     cross.addEventListener('click', close);
     pin.addEventListener('click', () => setPinned(!current.manual));
@@ -352,7 +375,7 @@
     if (session !== current) return;
     for (const item of LT.Settings.providersFor(settings, 'text')) {
       if (item.enabled === false && item.id !== settings.selectionProviderId) continue;
-      const name = item.name || (item.apiType === 'gemini' ? 'Gemini' : 'OpenAI 兼容');
+      const name = item.name || { gemini: 'Gemini', openai: 'OpenAI 兼容', anthropic: 'Claude' }[item.apiType];
       const models = [...new Set([...(item.models || []), ...(item.id === settings.selectionProviderId ? [settings.selectionModel] : [])])];
       if (!models.length) models.push('');
       for (const model of models) {
@@ -374,8 +397,9 @@
     if (LT.Settings.serviceProvider(settings, 'speech').enabled === false) showToast('当前朗读提供商已停用，请选择其他提供商', 3500);
     targetLanguage.value = settings.targetLang; current.savedTargetLang = settings.targetLang;
     current.rate = settings.ttsRate;
+    rateBtn.textContent = formatRate(current.rate);
     applyTheme(settings.uiTheme);
-    read.disabled = targetLanguage.disabled = translationProvider.disabled = provider.disabled = false;
+    read.disabled = rateBtn.disabled = targetLanguage.disabled = translationProvider.disabled = provider.disabled = false;
     cross.focus({ preventScroll: true });
     // 打开时先显示轻量的翻译状态；朗读只由用户点击扬声器启动。
     translateText();

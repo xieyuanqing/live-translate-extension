@@ -1,6 +1,6 @@
 # API 提供商与自定义请求头
 
-0.4.8 的「API 与模型」分为「功能与模型」和「API 提供商」。提供商页只管理文字、直播、朗读接口的连接信息和模型目录，不在提供商内分配翻译用途。文字接口可以保存多个模型，同一套 Key 和地址可供不同功能分别使用 Flash、Pro 等模型。「添加提供商」按文字模型、兼容 API、直播翻译、语音朗读分组；自定义 API 只有一个入口，可选 OpenAI 兼容／Gemini 协议。
+0.4.9 的「API 与模型」分为「功能与模型」和「API 提供商」。提供商页只管理文字、直播、朗读接口的连接信息和模型目录，不在提供商内分配翻译用途。文字接口可以保存多个模型，同一套 Key 和地址可供不同功能分别使用 Flash、Pro 等模型。「添加提供商」按文字模型、兼容 API、直播翻译、语音朗读分组；自定义 API 只有一个入口，可选 OpenAI 兼容／Gemini／Claude 协议。
 
 左侧选择、启停和排序提供商；右侧按类型填写 Key、地址、可用模型或音色。直播模型固定只读，朗读语速在功能页统一调整。停用未使用的配置保留数据，但不出现在功能选择中；被用途绑定的不能停用。排序不改变选用，复制得到独立配置；删除有绑定用途的配置需要同类型的已启用替代项，每类最后一套不能删除。
 
@@ -8,11 +8,12 @@
 
 ## 地址来源
 
-以下地址沿用 0.4.5 的预设，附官方资料入口。地址可编辑；提供商出现在列表中不代表账号、地域或模型已经通过实测。
+以下地址沿用 0.4.5 的预设（Claude 为 0.4.9 新增），附官方资料入口。地址可编辑；提供商出现在列表中不代表账号、地域或模型已经通过实测。
 
 | 预设 | 基础地址 | 官方资料 |
 | --- | --- | --- |
 | DeepSeek | `https://api.deepseek.com` | [首次调用](https://api-docs.deepseek.com/) |
+| Claude | `https://api.anthropic.com`（不含 `/v1`，程序追加 `/v1/messages`） | [Messages API](https://docs.claude.com/en/api/messages) |
 | 阿里百炼（北京） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | [地域与 Base URL](https://help.aliyun.com/en/model-studio/base-url) |
 | 阿里百炼（新加坡） | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | [地域与 Base URL](https://help.aliyun.com/en/model-studio/base-url) |
 | Groq | `https://api.groq.com/openai/v1` | [OpenAI compatibility](https://console.groq.com/docs/openai) |

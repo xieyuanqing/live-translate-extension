@@ -14,3 +14,11 @@ Thumbs.db
 
 # 导出的直播日志可能包含私人背景和文本，仅留在本地
 liuyi-live-log-*.json
+
+# VPS 转写后端运行配置与缓存（含 API Key / 令牌，绝不入库）
+vps-asr-server/config.json
+vps-asr-server/cache/
+vps-asr-server/tmp/
+
+# 代理临时附件目录
+.codex-remote-attachments/

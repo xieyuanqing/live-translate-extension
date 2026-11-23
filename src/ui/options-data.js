@@ -16,22 +16,24 @@ globalThis.LT = globalThis.LT || {};
     return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
   };
 
-  /** 默认剔除 Key 和可能携带凭据的自定义请求头。 */
+  /** 默认剔除 Key、访问令牌和可能携带凭据的自定义请求头。 */
   function exportObject(settings, includeKeys, version) {
     const copy = JSON.parse(JSON.stringify(LT.Settings.persistable(settings)));
     if (!includeKeys) {
+      copy.videoAsrToken = '';
       for (const p of copy.providers) { p.apiKey = ''; if (p.kind === 'text') p.headers = {}; }
     }
     return { app: APP, version, exportedAt: new Date().toISOString(), includesKeys: !!includeKeys, settings: copy };
   }
 
-  /** 校验并合并导入文件：不含凭据时保留现有 Key 和请求头（按接口配置 id 对应）。 */
+  /** 校验并合并导入文件：不含凭据时保留现有 Key、访问令牌和请求头（按接口配置 id 对应）。 */
   function importObject(raw, current) {
     if (!raw || raw.app !== APP || !raw.settings || typeof raw.settings !== 'object') {
       throw new Error('这不是流译的设置文件');
     }
     const next = LT.Settings.normalize(raw.settings);
     if (!raw.includesKeys) {
+      if (!next.videoAsrToken && current.videoAsrToken) next.videoAsrToken = current.videoAsrToken;
       for (const p of next.providers) {
         const own = (current.providers || []).find((q) => q.id === p.id) ||
           (!(Number(raw.settings.providerSchema) >= 2) && p.kind !== 'text' && LT.Settings.providersFor(current, p.kind).find(q => q.preset === p.preset));
@@ -206,7 +208,7 @@ globalThis.LT = globalThis.LT || {};
         state(`导入失败：${err && err.message ? err.message : '文件无法解析'}`);
         return;
       }
-      const summary = `${next.scenes.length} 项翻译偏好、${next.providers.length} 套接口配置、${raw.includesKeys ? '包含' : '不含'} Key 和请求头`;
+      const summary = `${next.providers.length} 套接口配置、${raw.includesKeys ? '包含' : '不含'} Key 和请求头`;
       if (!confirm(`用文件里的设置覆盖当前设置？\n${summary}\n字幕缓存不受影响。`)) return;
       await ctx.replace(next);
     });
@@ -227,6 +229,7 @@ globalThis.LT = globalThis.LT || {};
         next.commentProviderId = current.commentProviderId;
         next.chatProviderId = current.chatProviderId;
         for (const field of ['subsModel', 'liveContextModel', 'selectionModel', 'commentModel', 'chatModel']) next[field] = current[field];
+        for (const field of ['videoTranscriptMode', 'videoAsrBaseUrl', 'videoAsrToken', 'videoAsrModel', 'videoAsrModels', 'videoAsrSendContext']) next[field] = current[field];
       }
       await ctx.replace(LT.Settings.normalize(next));
     });

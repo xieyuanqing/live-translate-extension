@@ -36,14 +36,40 @@
         </div>
       </div>
 
+      <section id="homeOverview" class="home-overview hidden" aria-label="功能概览">
+        <div class="section-caption">核心翻译</div>
+        <div class="mode-grid">
+          <button type="button" id="homeOpenLive" class="mode-tile" data-mode="live">
+            <span class="mode-tile-head"><span class="mode-dot"></span><strong>1. 直播实时翻译</strong><span class="mode-tile-go">设置 ›</span></span>
+            <span id="homeLiveDesc" class="mode-tile-desc">实时抓取直播音频流</span>
+          </button>
+          <button type="button" id="homeOpenVideo" class="mode-tile" data-mode="video">
+            <span class="mode-tile-head"><span class="mode-dot"></span><strong>2. 视频翻译</strong><span class="mode-tile-go">设置 ›</span></span>
+            <span id="homeVideoDesc" class="mode-tile-desc">云端转写 / 字幕轨 + 整片翻译</span>
+          </button>
+        </div>
+        <div class="section-caption">其它功能</div>
+        <div class="other-chips">
+          <button type="button" id="homeOpenText" class="ghost small">聊天与评论 ›</button>
+          <button type="button" id="homeOpenSpeech" class="ghost small">划词与朗读 ›</button>
+        </div>
+      </section>
+
+      <div id="coreSectionLabel" class="section-caption hidden">核心翻译</div>
+
       <section id="vsBox" class="vs hidden">
         <div class="vs-head">
-          <span class="vs-title">整片字幕</span>
+          <span class="vs-title"><span class="mode-dot mode-dot-video" aria-hidden="true"></span>视频翻译</span>
           <span id="vsState" class="muted small">—</span>
         </div>
-        <div class="vs-bar" id="vsProgressBar" role="progressbar" aria-label="整片字幕翻译进度" aria-valuemin="0" aria-valuemax="100"><i id="vsProgress"></i></div>
+        <div id="vsSourceRow" class="vs-source-row">
+          <span id="vsSourcePill" class="vs-source-pill"></span>
+          <select id="vsAsrModel" class="vs-model-select hidden" aria-label="VPS 转写模型"></select>
+          <button id="openVideoOptions" class="ghost small text-settings-link" type="button">配置 ›</button>
+        </div>
+        <div class="vs-bar" id="vsProgressBar" role="progressbar" aria-label="视频翻译进度" aria-valuemin="0" aria-valuemax="100"><i id="vsProgress"></i></div>
         <div class="vs-actions">
-          <button class="primary" id="vsStart">翻译整片字幕</button>
+          <button class="primary" id="vsStart">开始视频翻译</button>
           <button id="vsCancel" class="hidden">取消翻译</button>
           <button class="ghost hidden" id="vsToggle">隐藏字幕</button>
           <button class="ghost hidden" id="vsRetranslate">重新翻译</button>
@@ -51,69 +77,80 @@
         <div id="vsHint" class="muted small"></div>
       </section>
 
-      <button class="primary toggle" id="toggle">开始实时翻译</button>
-      <button class="ghost toggle secondary hidden" id="liveToggleCaptions">隐藏直播字幕</button>
+      <section id="liveCard" class="live-card">
+        <div id="liveCardHead" class="live-head">
+          <span class="live-title"><span class="mode-dot mode-dot-live" aria-hidden="true"></span>直播实时翻译</span>
+          <button id="openLiveOptions" class="ghost small text-settings-link" type="button">设置 ›</button>
+        </div>
+        <button class="primary toggle" id="toggle">开始实时翻译</button>
+        <button class="ghost toggle secondary hidden" id="liveToggleCaptions">隐藏直播字幕</button>
+
+        <div id="liveDetails" class="hidden">
+          <div class="stats">
+            <div class="stat connection"><span class="muted">状态</span><span id="stConn" aria-live="polite">—</span></div>
+            <div class="stat"><span class="muted">方向</span><span id="stDir">—</span></div>
+            <div class="stat"><span class="muted">本场配置</span><span id="stContext">—</span></div>
+            <div class="stat"><span class="muted">已运行</span><span id="stTime">—</span></div>
+          </div>
+
+          <div class="level-wrap">
+            <span class="muted small">输入音量</span>
+            <div class="level"><i id="level"></i></div>
+          </div>
+        </div>
+
+        <button class="ghost small hidden" id="restart">应用当前设置并重新开始</button>
+      </section>
+
       <button class="toggle hidden" id="reloadPage">刷新页面，重新连接插件</button>
 
-      <div id="liveDetails" class="hidden">
-      <div class="stats">
-        <div class="stat connection"><span class="muted">状态</span><span id="stConn" aria-live="polite">—</span></div>
-        <div class="stat"><span class="muted">方向</span><span id="stDir">—</span></div>
-        <div class="stat"><span class="muted">本场配置</span><span id="stContext">—</span></div>
-        <div class="stat"><span class="muted">已运行</span><span id="stTime">—</span></div>
-      </div>
-
-      <div class="level-wrap">
-        <span class="muted small">输入音量</span>
-        <div class="level"><i id="level"></i></div>
-      </div>
-      </div>
-
+      <div id="otherSectionLabel" class="section-caption hidden">其它功能</div>
 
       <section id="textBox" class="text-box hidden">
-        <div class="text-head">YouTube 聊天与评论</div>
-        <label class="text-check"><input type="checkbox" id="chatTranslationToggle" role="switch" /><span>聊天自动翻译<small>本地翻译或所选文字接口</small></span></label>
+        <div class="text-head">
+          <span>聊天与评论</span>
+          <button id="openTextOptions" class="ghost small text-settings-link" type="button">设置 ›</button>
+        </div>
+        <label class="text-check" id="chatToggleRow"><input type="checkbox" id="chatTranslationToggle" role="switch" /><span>弹幕自动翻译</span></label>
         <div id="chatPrepareActions" class="chat-actions hidden">
           <button id="prepareChatTranslation" class="small">准备本地翻译</button>
           <span id="chatPrepareProgress" class="muted small" role="status"></span>
         </div>
-        <label class="text-check"><input type="checkbox" id="commentTranslationToggle" role="switch" /><span>评论翻译按钮<small>独立选择接口与模型</small></span></label>
-        <div class="text-actions">
+        <label class="text-check" id="commentToggleRow"><input type="checkbox" id="commentTranslationToggle" role="switch" /><span>评论区翻译</span></label>
+        <div id="commentActions" class="text-actions hidden">
           <button id="translateVisibleComments" class="small">翻译当前可见评论</button>
-          <button id="cancelCommentTranslation" class="ghost small">停止评论翻译</button>
+          <button id="cancelCommentTranslation" class="ghost small hidden">停止</button>
         </div>
         <div id="textState" class="muted small" role="status"></div>
-        <button id="openTextOptions" class="ghost small">聊天与评论设置</button>
       </section>
 
       <details id="contextBox" class="context-box hidden">
-        <summary>本场提示词与术语</summary>
+        <summary>本场背景与术语补充</summary>
         <div class="field temp">
-          <label class="label" for="tempContext">本场补充 · 可选</label>
-          <textarea id="tempContext" rows="2"
-            placeholder="补充今天的游戏、人物背景或固定译法…"></textarea>
+          <textarea id="tempContext" rows="2" aria-label="本场补充"
+            placeholder="补充本场游戏、人物名称或固定译法（换视频自动清空）…"></textarea>
           <div id="tempHint" class="muted small"></div>
         </div>
         <div class="context-actions">
-          <button id="previewContext" class="small">生成并预览</button>
-          <button id="copyContext" class="ghost small" disabled>复制内容</button>
+          <button id="previewContext" class="small">AI 提炼背景与术语</button>
+          <button id="copyContext" class="ghost small" disabled>复制</button>
         </div>
-        <div id="contextState" class="muted small" role="status">可在开始翻译前生成，检查后再开始。</div>
+        <div id="contextState" class="muted small" role="status"></div>
         <div id="contextContent" class="hidden">
-          <p id="contextEffect" class="muted small"></p>
-          <label class="label" for="generatedContext">整理结果：背景与候选术语</label>
-          <textarea id="generatedContext" rows="5" readonly></textarea>
-          <label id="effectivePromptLabel" class="label" for="effectivePrompt">本场翻译配置</label>
-          <textarea id="effectivePrompt" rows="7" readonly></textarea>
+          <label class="label" for="generatedContext">AI 提炼结果</label>
+          <textarea id="generatedContext" rows="4" readonly></textarea>
           <details class="generator-input">
-            <summary>查看整理模型的输入提示词</summary>
-            <textarea id="generatorPrompt" rows="7" readonly aria-label="整理模型的输入提示词"></textarea>
+            <summary>底层发送配置（调试）</summary>
+            <p id="contextEffect" class="muted small"></p>
+            <label id="effectivePromptLabel" class="label" for="effectivePrompt">本场翻译配置</label>
+            <textarea id="effectivePrompt" rows="5" readonly></textarea>
+            <label class="label" for="generatorPrompt">整理模型的输入提示词</label>
+            <textarea id="generatorPrompt" rows="5" readonly aria-label="整理模型的输入提示词"></textarea>
           </details>
         </div>
       </details>
 
       <div id="hint" class="muted small"></div>
-      <button class="ghost small hidden" id="restart">应用当前设置并重新开始</button>
 
     </section>
 

@@ -36,6 +36,54 @@ test('公开预览的整理输入与文字模型实际收到的 system/user 相�
   assert.equal(result.phrases.ゆに, 'YuNi');
 });
 
+test('开播背景整理缓存：同视频跨刷新命中，超期自动失效，键不含明文凭据', async () => {
+  const store = new Map();
+  let now = 1_700_000_000_000;
+  const ctx = vm.createContext({
+    setTimeout: () => 1,
+    clearTimeout() {},
+    AbortController,
+    Date: { now: () => now },
+    chrome: {
+      storage: {
+        local: {
+          async get(key) { return store.has(key) ? { [key]: JSON.parse(JSON.stringify(store.get(key))) } : {}; },
+          async set(obj) { for (const [k, v] of Object.entries(obj)) store.set(k, JSON.parse(JSON.stringify(v))); },
+        },
+      },
+    },
+  });
+  for (const file of ['src/common/constants.js', 'src/common/live-context.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), ctx);
+  }
+  const LT = ctx.LT;
+  const settings = { sourceLang: 'ja', targetLang: 'zh', apiKeys: 'SECRET_KEY' };
+  const key = LT.LiveContext.cacheKey({ videoId: 'live-123', settings, metadataText: '标题：歌回', notes: '人名表', model: 'm1' });
+  assert.ok(key.startsWith('live-123:'));
+  assert.equal(key.includes('SECRET_KEY'), false);
+  assert.equal(key.includes('人名表'), false);
+
+  await LT.LiveContext.setCached(key, {
+    generated: { background: '深夜歌回直播', phrases: { ゆに: 'YuNi' } },
+    generatorModel: 'm1',
+    generatorProvider: 'Gemini',
+  });
+
+  const hit = await LT.LiveContext.getCached(key);
+  assert.equal(hit.generated.background, '深夜歌回直播');
+  assert.equal(hit.generated.phrases.ゆに, 'YuNi');
+  assert.equal(hit.generatorModel, 'm1');
+
+  // 更换整理模型或补充内容后键不同
+  const changedKey = LT.LiveContext.cacheKey({ videoId: 'live-123', settings, metadataText: '标题：歌回', notes: '新补充', model: 'm1' });
+  assert.notEqual(changedKey, key);
+  assert.equal(await LT.LiveContext.getCached(changedKey), null);
+
+  // 超过 24 小时后自动失效
+  now += 25 * 60 * 60 * 1000;
+  assert.equal(await LT.LiveContext.getCached(key), null);
+});
+
 test('千问增量字幕保留重复歌词和重复词，Gemini 保持原有去重行为', () => {
   const LT = harness();
   for (const qwen of [true, false]) {

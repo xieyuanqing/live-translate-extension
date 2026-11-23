@@ -38,9 +38,11 @@
 
   function refreshToolbar() {
     if (!toolbar) return;
-    toolbar.visible.disabled = !active();
-    toolbar.cancel.disabled = !processing && !pending();
-    toolbar.state.textContent = error || (pending() ? `正在翻译 ${pending()} 条…` : '选择单条评论，或翻译当前可见内容');
+    const busy = processing || pending() > 0;
+    toolbar.visible.disabled = !active() || busy;
+    toolbar.cancel.disabled = !busy;
+    toolbar.cancel.hidden = !busy;
+    toolbar.state.textContent = error || (pending() ? `正在翻译 ${pending()} 条…` : '');
   }
 
   function reset({ remove = false } = {}) {

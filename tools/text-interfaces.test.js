@@ -15,14 +15,16 @@ function harness(apiType = 'openai') {
   LT.Net = {
     async request(req) {
       requests.push(req);
-      return { ok: true, status: 200, text: JSON.stringify(apiType === 'openai'
-        ? { data: [{ id: 'm-a' }] } : { models: [{ name: 'models/m-a' }], displayName: 'm-a' }) };
+      return { ok: true, status: 200, text: JSON.stringify(apiType === 'gemini'
+        ? { models: [{ name: 'models/m-a' }], displayName: 'm-a' } : { data: [{ id: 'm-a' }] }) };
     },
     async post(req) {
       requests.push(req);
-      return { ok: true, status: 200, text: JSON.stringify(apiType === 'openai'
-        ? { choices: [{ message: { content: '1\t你好' }, finish_reason: 'stop' }] }
-        : { candidates: [{ content: { parts: [{ text: '1\t你好' }] }, finishReason: 'STOP' }] }) };
+      return { ok: true, status: 200, text: JSON.stringify({
+        openai: { choices: [{ message: { content: '1\t你好' }, finish_reason: 'stop' }] },
+        gemini: { candidates: [{ content: { parts: [{ text: '1\t你好' }] }, finishReason: 'STOP' }] },
+        anthropic: { type: 'message', content: [{ type: 'text', text: '1\t你好' }], stop_reason: 'end_turn' },
+      }[apiType]) };
     },
     parseSse: text => [JSON.parse(text)],
   };
@@ -31,7 +33,7 @@ function harness(apiType = 'openai') {
   return { LT, requests, settings, config: () => LT.TextModel.resolve(settings, 'p', settings.subsModel) };
 }
 
-for (const apiType of ['openai', 'gemini']) test(`${apiType} 只用自定义头鉴权，列表、查询和生成均携带同一份请求头`, async () => {
+for (const apiType of ['openai', 'gemini', 'anthropic']) test(`${apiType} 只用自定义头鉴权，列表、查询和生成均携带同一份请求头`, async () => {
   const h = harness(apiType), config = h.config();
   assert.equal(config.key, '');
   assert.equal(h.LT.TextModel.hasCredentials(config), true);
@@ -44,6 +46,7 @@ for (const apiType of ['openai', 'gemini']) test(`${apiType} 只用自定义头�
     assert.equal(req.headers['x-tenant'], 'team-a');
     assert.equal(req.headers.authorization, undefined);
     assert.equal(req.headers['x-goog-api-key'], undefined);
+    if (apiType === 'anthropic') assert.equal(req.headers['anthropic-version'], '2023-06-01');
   }
 });
 

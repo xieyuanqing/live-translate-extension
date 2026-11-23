@@ -10,11 +10,13 @@ Selected text can also be translated from the right-click menu or read aloud in 
 [![Checks](https://github.com/xieyuanqing/live-translate-extension/actions/workflows/check.yml/badge.svg)](https://github.com/xieyuanqing/live-translate-extension/actions/workflows/check.yml)
 [![Core MIT License](https://img.shields.io/badge/core-MIT-blue.svg)](LICENSE) · [Private TTS adapter: GPLv3](docs/third-party-tts.md)
 
-**Development version 0.4.8 (unreleased).** A standalone Chrome Manifest V3 extension. The current interface is in Simplified Chinese. Install it manually for now; it is not listed in a browser extension store.
+**Development version 0.4.9 (unreleased).** A standalone Chrome Manifest V3 extension. The current interface is in Simplified Chinese. Install it manually for now; it is not listed in a browser extension store.
 
 Settings and the popup share light and soft neutral-gray dark themes. Choose system appearance (default), light, or dark under Settings → 外观; the popup also has a theme button. The popup has a fixed 420 px width, rounded groups, blue actions, and switches. Language choices come first; connection/audio details appear while translation runs.
 
-Settings → **API 与模型** has two tabs. **功能分配** is the single place to choose the interface and model for each feature; the feature pages show the current choice and link directly to its row there. **API 提供商** stores connections, credentials and available models, with filters for all, live translation, text models and original-text reading. One DeepSeek connection can expose Flash for chat/comments and Pro for whole-video subtitles. Provider cards do not assign feature purposes.
+Settings → **API 与模型** has two tabs. **功能分配** is the single place to choose the interface and model for each feature; the feature pages show the current choice and link directly to its row there. **API 提供商** stores connections, credentials and available models, with filters for all, text models, live translation and original-text reading. One DeepSeek connection can expose Flash for chat/comments and Pro for whole-video subtitles. Provider cards do not assign feature purposes.
+
+The three interface kinds have fixed colors and icons: indigo text lines for text models, a red waveform for live translation and a teal speaker for original-text reading. The provider list, filters, editor header, feature assignments and each feature page's current-interface block share these marks. The "all" view groups providers by kind, and the editor header shows, read-only, which features use the provider. Each sidebar section has its own colored icon tile that the page title and card headings follow; setup states appear as small ✓ (tested), ! (needs attention) and • (filled in, untested) labels.
 
 | Group | Settings pages |
 | --- | --- |
@@ -63,7 +65,7 @@ These screenshots show an earlier built-in offline preview with empty credential
 - Caches the source text and translations per video. Reopening a video shows them automatically, and an interrupted run resumes where it stopped.
 - The single inline player button starts or cancels whole-video translation; after the translation is ready, it shows or hides the cached captions. The popup also has a caption visibility control. Hiding captions leaves the cache intact.
 - Never silently retranslates after you change the model or prompt: the old cache stays in use and is labeled; only **重新翻译** spends credits again.
-- AI context generation and whole-video subtitle translation independently select a text interface. Both support OpenAI-compatible `chat/completions` endpoints (the default for new configurations) and Gemini `generateContent`, with model names you type in.
+- AI context generation and whole-video subtitle translation independently select a text interface. Both support OpenAI-compatible `chat/completions` endpoints (the default for new configurations), Gemini `generateContent` and Claude (Anthropic Messages), with model names you type in.
 
 **YouTube chat, comments, and replies**
 
@@ -88,7 +90,7 @@ The two subtitle modes share the caption layer and settings. Qwen 3.8 detects th
 
 ## Install
 
-1. For this development version, use a locally built `live-translate-extension-0.4.8.zip`, or load this checkout directly. [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) contains published versions; 0.4.8 has not been published yet.
+1. For this development version, use a locally built `live-translate-extension-0.4.9.zip`, or load this checkout directly. [Releases](https://github.com/xieyuanqing/live-translate-extension/releases/latest) contains published versions; 0.4.9 has not been published yet.
 2. Extract it into a permanent folder. Keep that folder after installation.
 3. Open `chrome://extensions/` and turn on **Developer mode**.
 4. Choose **Load unpacked** and select the extracted folder containing `manifest.json`.
@@ -109,9 +111,9 @@ Configure only the mode you want to use. Live audio and whole-video subtitles do
 
 Gemini keys can be obtained from [Google AI Studio](https://aistudio.google.com/apikey). Gemini Live uses a WSS endpoint; Qwen accepts the specified Bailian workspace hosts and requires the visible **所有网站权限 → 授权** action for its authenticated WebSocket. The extension limits its temporary header rule to the current YouTube tab and exact Qwen URL, then removes it after the handshake.
 
-The **添加提供商** dialog groups text models, custom APIs, live audio translation and speech. Text services include OpenAI, Gemini, DeepSeek, Alibaba Bailian (Beijing/Singapore), Groq and Moonshot. Other text endpoints use the single custom API entry, where you choose OpenAI-compatible or Gemini protocol. Live choices are Gemini/Qwen; speech choices are Microsoft/Gemini. Unavailable DeepL/DeepLX entries are hidden.
+The **添加提供商** dialog groups text models, custom APIs, live audio translation and speech. Text services include OpenAI, DeepSeek, Claude, Gemini, Alibaba Bailian (Beijing/Singapore), Groq and Moonshot. Other text endpoints use the single custom API entry, where you choose the OpenAI-compatible, Gemini or Claude protocol. Live choices are Gemini/Qwen; speech choices are Microsoft/Gemini. Unavailable DeepL/DeepLX entries are hidden.
 
-The provider list can be filtered to show all connections, live translation, text models or original-text reading. The editor shows fields for the selected kind: a text model directory and headers, live credentials/address with a fixed model, or speech model and voices. Names, optional notes and keys remain independent for every configuration. Unused providers can be disabled without deleting them; assigned providers cannot be disabled. Ordering does not change feature choices. Assignments live only in **功能分配**; feature pages show a summary and link there. Copies are independent. Deleting an assigned provider requires an enabled replacement of the same kind; the last provider of a kind cannot be deleted. Older live/speech settings migrate into this list, and previous third-party text configurations remain intact as custom APIs.
+The provider list can be filtered to show all connections, text models, live translation or original-text reading; the "all" view groups them by these kinds, and reordering stays within a kind. The editor shows fields for the selected kind: a text model directory and headers, live credentials/address with a fixed model, or speech model and voices. Names, optional notes and keys remain independent for every configuration. Unused providers can be disabled without deleting them; assigned providers cannot be disabled. Ordering does not change feature choices. Assignments live only in **功能分配**; feature pages show a summary and link there. Copies are independent. Deleting an assigned provider requires an enabled replacement of the same kind; the last provider of a kind cannot be deleted. Older live/speech settings migrate into this list, and previous third-party text configurations remain intact as custom APIs.
 
 Fetch or manually add model IDs in the provider editor. Under **功能分配**, each feature can choose from that directory or enter an ID directly. Typing filters the list; arrow keys plus Enter select a model. **查询接口** only checks metadata; each model row has a **测试** button that sends a tiny request through the translation path and uses some quota. Declining browser permission stops that request.
 
@@ -186,6 +188,7 @@ The implementation rotates Gemini connections every 505 seconds by default and Q
 ## Current limits
 
 - Chrome is the tested browser. Other Chromium browsers and their stores have not been validated.
+- The 0.4.9 Claude protocol and settings color update passes syntax/self-tests and all 186 simulated regressions. New coverage includes Claude request building, streaming assembly that skips thinking blocks, `max_tokens` truncation, in-stream errors, non-streaming responses, protocol migration, and the grouped "all" provider view with same-kind ordering. An offline Chrome preview of all nine sections, the provider page and the Add Provider dialog at 1440/390 px in light/dark themes finds no horizontal overflow or script errors, and checks the Claude preset plus the address rule and key hint after switching a custom API to Claude. Packaging produces a 60-file ZIP; `git diff --check` passes. No real Anthropic endpoint was contacted: Claude direct-page CORS, streaming output and the model list still need validation in the installed extension.
 - The 0.4.8 provider/model update passes syntax/self-tests and all 184 simulated regressions. An offline Chrome preview checks all seven feature-page deep links to 功能分配, the absence of duplicate selectors on feature pages, summaries updating after an assignment, and four provider filters without changing bindings. At 1440/390 px in light/dark themes it finds no horizontal overflow, script errors or network requests. Packaging produces a 60-file ZIP; `git diff --check` passes. This simulated preview does not verify the real extension, YouTube workflows, API accounts, live audio or native Chrome permission dialogs.
 - The earlier 0.4.7 unified-provider update passed 178 simulated regressions and 77 offline Chrome UI checks at 1440/390 px in light/dark themes. These results describe the previous interface.
 - The earlier 0.4.6 provider-management update passed syntax checks for 68 JavaScript files, algorithm self-tests and all 164 simulated regressions. An offline Chromium fixture passed 49 checks at 1440/390 px in light/dark themes, covering the page and Add Provider dialog, mobile enable switches, independent configurations and fixed identities, feature assignment, disable/delete/copy, drag ordering, keyboard controls and unavailable entries that could not be saved. It recorded no script errors or network requests. Packaging produced a 0.4.6 ZIP with 60 runtime files, and `git diff --check` passed. These results describe 0.4.6 and did not verify real service accounts, native Chrome permission dialogs or YouTube workflows.
@@ -212,7 +215,7 @@ npm run check
 npm run package
 ```
 
-`check` runs JavaScript syntax checks, version consistency, self-tests (audio, live captions, prompts, json3 parsing, segmentation, chunk validation, playback scheduling), session lifecycle, live-log redaction and retention, Qwen protocol/authentication, whole-video subtitle tasks, and selection/TTS cancellation, language, formats and resource cleanup. `package` creates `dist/live-translate-extension-0.4.8.zip` with `manifest.json` at its root and only the runtime files.
+`check` runs JavaScript syntax checks, version consistency, self-tests (audio, live captions, prompts, json3 parsing, segmentation, chunk validation, playback scheduling), session lifecycle, live-log redaction and retention, Qwen protocol/authentication, whole-video subtitle tasks, and selection/TTS cancellation, language, formats and resource cleanup. `package` creates `dist/live-translate-extension-0.4.9.zip` with `manifest.json` at its root and only the runtime files.
 
 The same checks and package verification run in GitHub Actions. Automated tests simulate browser callbacks, WebSockets, caption tracks, and model responses; they do not exercise real Gemini access, live audio capture, or YouTube's caption endpoint.
 

@@ -104,3 +104,32 @@ test('多 Key 复用签名重复读取稳定，改变 Key 列表或模型会使�
   const independent = h.normalize({ ...settings, providers: [{ ...settings.providers[0], apiKey: 'test-own-key' }] });
   assert.equal(h.signature({ ...independent, apiKeys: 'other-live-key' }, 'g'), h.signature(independent, 'g'));
 });
+
+test('视频翻译 VPS 转写状态区分策略与地址有效性，端口不进入域名权限', () => {
+  const h = harness();
+  const asr = h.LT.OptionsUI.videoAsrState;
+  const youtubeOnly = asr(h.normalize({ videoTranscriptMode: 'youtube', videoAsrBaseUrl: '' }));
+  assert.equal(youtubeOnly.enabled, false);
+  assert.equal(youtubeOnly.complete, true);
+  assert.deepEqual(Array.from(youtubeOnly.origins), []);
+
+  const autoEmpty = asr(h.normalize({ videoTranscriptMode: 'auto', videoAsrBaseUrl: '' }));
+  assert.equal(autoEmpty.enabled, true);
+  assert.equal(autoEmpty.required, false);
+  assert.equal(autoEmpty.configured, false);
+  assert.equal(autoEmpty.complete, true);
+
+  const vpsEmpty = asr(h.normalize({ videoTranscriptMode: 'vps', videoAsrBaseUrl: '' }));
+  assert.equal(vpsEmpty.required, true);
+  assert.equal(vpsEmpty.complete, false);
+  assert.ok(vpsEmpty.missing.includes('VPS 服务地址'));
+
+  const vpsInvalid = asr(h.normalize({ videoTranscriptMode: 'vps', videoAsrBaseUrl: 'ftp://bad.example' }));
+  assert.equal(vpsInvalid.complete, false);
+  assert.ok(vpsInvalid.missing.includes('有效的 VPS 地址'));
+
+  const vpsReady = asr(h.normalize({ videoTranscriptMode: 'vps', videoAsrBaseUrl: 'https://asr.example.com:8443/' }));
+  assert.equal(vpsReady.complete, true);
+  assert.equal(vpsReady.configured, true);
+  assert.deepEqual(Array.from(vpsReady.origins), ['https://asr.example.com/*']);
+});

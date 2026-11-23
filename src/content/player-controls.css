@@ -1,5 +1,6 @@
-/* 流译在 YouTube 控制栏只占一个原生按钮宽度。 */
+/* 流译在 YouTube 控制栏只占一个原生按钮宽度，点击后在按钮上方弹出原生风格的二级菜单。 */
 .ytp-right-controls > .lt-player-controls {
+  position: relative;
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
@@ -24,7 +25,10 @@
 }
 
 .lt-player-controls__button:disabled { cursor: default; opacity: .5; }
-.lt-player-controls__button:hover:not(:disabled) { background: rgba(255, 255, 255, .12); }
+.lt-player-controls__button:hover:not(:disabled),
+.lt-player-controls[data-menu-open='yes'] .lt-player-controls__button {
+  background: rgba(255, 255, 255, .12);
+}
 .lt-player-controls__button:focus-visible { outline: 2px solid #fff; outline-offset: -3px; }
 
 .lt-player-controls__button svg {
@@ -46,5 +50,224 @@
   width: 14px;
   height: 2px;
   border-radius: 1px;
-  background: currentColor;
+  background: #f03;
+}
+
+/* YouTube 原生暗色毛玻璃二级菜单 */
+.lt-player-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 70;
+  width: 256px;
+  padding: 10px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: rgba(28, 28, 28, .94);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .48), 0 0 0 1px rgba(255, 255, 255, .12);
+  color: #f1f1f1;
+  font: 12px/1.4 'YouTube Noto', Roboto, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  text-align: left;
+  user-select: none;
+}
+
+.lt-player-menu[hidden] {
+  display: none !important;
+}
+
+.lt-player-menu__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, .1);
+}
+
+.lt-player-menu__meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.lt-player-menu__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lt-player-menu__status {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, .64);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lt-player-menu__primary {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: #f1f1f1;
+  color: #0f0f0f;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease, opacity 120ms ease;
+}
+
+.lt-player-menu__primary:hover:not(:disabled) {
+  background: #fff;
+}
+
+.lt-player-menu__primary[data-tone='danger'] {
+  background: rgba(255, 78, 69, .2);
+  border-color: rgba(255, 78, 69, .45);
+  color: #ff8983;
+}
+
+.lt-player-menu__primary[data-tone='danger']:hover:not(:disabled) {
+  background: rgba(255, 78, 69, .3);
+}
+
+.lt-player-menu__primary[data-tone='subtle'] {
+  background: rgba(255, 255, 255, .12);
+  border-color: rgba(255, 255, 255, .18);
+  color: #f1f1f1;
+}
+
+.lt-player-menu__primary[data-tone='subtle']:hover:not(:disabled) {
+  background: rgba(255, 255, 255, .2);
+}
+
+.lt-player-menu__primary:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.lt-player-menu__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 6px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #f1f1f1;
+  font: inherit;
+}
+
+.lt-player-menu__row[hidden] {
+  display: none !important;
+}
+
+.lt-player-menu__row--clickable {
+  cursor: pointer;
+}
+
+.lt-player-menu__row--clickable:hover {
+  background: rgba(255, 255, 255, .1);
+}
+
+.lt-player-menu__label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, .9);
+  white-space: nowrap;
+}
+
+.lt-player-menu__switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 34px;
+  height: 18px;
+  padding: 2px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .24);
+  transition: background-color 140ms ease;
+}
+
+.lt-player-menu__row[data-checked='yes'] .lt-player-menu__switch {
+  background: #3ea6ff;
+}
+
+.lt-player-menu__switch-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateX(0);
+  transition: transform 140ms ease;
+}
+
+.lt-player-menu__row[data-checked='yes'] .lt-player-menu__switch-thumb {
+  transform: translateX(16px);
+}
+
+.lt-player-menu__seg,
+.lt-player-menu__stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .08);
+}
+
+.lt-player-menu__seg-btn,
+.lt-player-menu__step-btn,
+.lt-player-menu__step-val {
+  height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, .78);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.lt-player-menu__seg-btn:hover:not(:disabled),
+.lt-player-menu__step-btn:hover:not(:disabled),
+.lt-player-menu__step-val:hover:not(:disabled) {
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+}
+
+.lt-player-menu__seg-btn[data-active='yes'] {
+  background: rgba(255, 255, 255, .22);
+  color: #fff;
+  font-weight: 600;
+}
+
+.lt-player-menu__step-btn {
+  width: 24px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lt-player-menu__step-btn:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.lt-player-menu__step-val {
+  min-width: 44px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
 }
