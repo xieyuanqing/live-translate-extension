@@ -109,6 +109,50 @@ test('Gemini endpoint、时间戳解析（含 HH:MM:SS 与 00:00.5）和请求�
   }
 });
 
+test('Gemini 适配器转写模式发送 audioTranscriptionConfig 并按词级时间戳断句', async () => {
+  const oldFetch = global.fetch;
+  try {
+    global.fetch = async (url, opts) => {
+      const sent = JSON.parse(opts.body);
+      assert.equal(sent.contents[0].role, 'user');
+      assert.equal(sent.contents[0].parts.length, 1);
+      assert.ok(sent.contents[0].parts[0].inlineData);
+      assert.deepEqual(sent.generationConfig, {
+        audioTranscriptionConfig: { wordTimestamp: true, languageCodes: ['ja-JP'] }
+      });
+      const words = [
+        { word: '3D', startOffset: '2.100s', endOffset: '2.700s' },
+        { word: '配信。', startOffset: '2.700s', endOffset: '3.600s' },
+        { word: 'そう', startOffset: '9.400s', endOffset: '9.800s' },
+        { word: '簡単', startOffset: '9.800s', endOffset: '10.200s' },
+        { word: '系で', startOffset: '12s', endOffset: '12.500s' }
+      ];
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: 'x', audioTranscription: { text: 'x', words } }] } }] }),
+        { status: 200 }
+      );
+    };
+    const rows = await gemini.transcribeChunk({
+      audioBuffer: Buffer.from('abc'),
+      durationMs: 60000,
+      sourceLang: 'ja',
+      modelConfig: {
+        baseUrl: 'https://relay.example.com',
+        apiModel: 'gemini-3.5-transcribe',
+        apiKey: 'test-key',
+        extra: { audioTranscriptionConfig: { wordTimestamp: true } }
+      }
+    });
+    assert.deepEqual(rows, [
+      { startMs: 2100, endMs: 3600, text: '3D配信。' },
+      { startMs: 9400, endMs: 10200, text: 'そう簡単' },
+      { startMs: 12000, endMs: 12500, text: '系で' }
+    ]);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
 test('OpenAI 适配器跳过 auto 语言、标准化区域码并兼容仅返回 text 的响应', async () => {
   const oldFetch = global.fetch;
   try {

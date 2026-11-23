@@ -97,6 +97,62 @@ function buildInstruction(sourceLang, context) {
   return parts.join('\n');
 }
 
+// Gemini 3.5 Transcribe 等专用转写模型：不读提示词、不支持 JSON mode，
+// 时间戳须经 generationConfig.audioTranscriptionConfig.wordTimestamp 开启，结果在 part.audioTranscription.words
+const LANGUAGE_CODES = {
+  ja: 'ja-JP', en: 'en-US', zh: 'cmn-Hans-CN', ko: 'ko-KR', fr: 'fr-FR', de: 'de-DE',
+  es: 'es-ES', it: 'it-IT', pt: 'pt-BR', ru: 'ru-RU', vi: 'vi-VN', th: 'th-TH', id: 'id-ID'
+};
+const SENTENCE_END_RE = /[。．！？!?…]$/;
+const SEGMENT_GAP_MS = 800;
+const SEGMENT_MAX_MS = 8000;
+
+function languageCode(sourceLang) {
+  const raw = String(sourceLang || '').trim();
+  if (!raw || raw === 'auto') return '';
+  if (/^zh-(TW|HK|Hant)/i.test(raw)) return 'cmn-Hant-TW';
+  if (raw.includes('-')) return raw;
+  return LANGUAGE_CODES[raw.toLowerCase()] || '';
+}
+
+// protobuf Duration 字符串，如 "2.100s"
+function offsetMs(value, durationMs) {
+  const match = String(value ?? '').trim().match(/^(\d+(?:\.\d+)?)s$/);
+  return match ? clampMs(Number(match[1]) * 1000, durationMs) : parseTimeMs(value, durationMs);
+}
+
+function joinWords(prev, word) {
+  return /[A-Za-z0-9]$/.test(prev) && /^[A-Za-z0-9]/.test(word) ? `${prev} ${word}` : prev + word;
+}
+
+// 词级时间戳按句末标点、停顿和最大时长合并成字幕句
+function groupWords(words, durationMs = 0) {
+  const out = [];
+  let cur = null;
+  for (const item of words || []) {
+    const word = String(item?.word ?? '').trim();
+    if (!word) continue;
+    const startMs = offsetMs(item.startOffset, durationMs);
+    const endMs = Math.max(startMs, offsetMs(item.endOffset, durationMs));
+    if (cur && (startMs - cur.endMs >= SEGMENT_GAP_MS || endMs - cur.startMs > SEGMENT_MAX_MS)) {
+      out.push(cur);
+      cur = null;
+    }
+    if (cur) {
+      cur.text = joinWords(cur.text, word);
+      cur.endMs = endMs;
+    } else {
+      cur = { startMs, endMs, text: word };
+    }
+    if (SENTENCE_END_RE.test(word)) {
+      out.push(cur);
+      cur = null;
+    }
+  }
+  if (cur) out.push(cur);
+  return out.filter(item => item.endMs > item.startMs);
+}
+
 async function transcribeChunk({
   audioBuffer,
   mimeType = 'audio/mpeg',
@@ -106,30 +162,30 @@ async function transcribeChunk({
   modelConfig,
   signal
 }) {
+  const transcriptionConfig = modelConfig.extra && typeof modelConfig.extra.audioTranscriptionConfig === 'object'
+    ? { ...modelConfig.extra.audioTranscriptionConfig }
+    : null;
+  if (transcriptionConfig && !transcriptionConfig.languageCodes && languageCode(sourceLang)) {
+    transcriptionConfig.languageCodes = [languageCode(sourceLang)];
+  }
   const instruction = buildInstruction(sourceLang, context);
   const extraGenConfig = modelConfig.extra && typeof modelConfig.extra.generationConfig === 'object'
     ? modelConfig.extra.generationConfig
     : {};
-  const body = {
-    contents: [
-      {
-        parts: [
-          { text: instruction },
-          {
-            inlineData: {
-              mimeType,
-              data: Buffer.from(audioBuffer).toString('base64')
-            }
-          }
-        ]
+  const audioPart = { inlineData: { mimeType, data: Buffer.from(audioBuffer).toString('base64') } };
+  const body = transcriptionConfig
+    ? {
+        contents: [{ role: 'user', parts: [audioPart] }],
+        generationConfig: { ...extraGenConfig, audioTranscriptionConfig: transcriptionConfig }
       }
-    ],
-    generationConfig: {
-      temperature: 0,
-      responseMimeType: 'application/json',
-      ...extraGenConfig
-    }
-  };
+    : {
+        contents: [{ role: 'user', parts: [{ text: instruction }, audioPart] }],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json',
+          ...extraGenConfig
+        }
+      };
 
   const headers = { ...(modelConfig.headers || {}) };
   if (!hasHeader(headers, 'content-type')) {
@@ -149,10 +205,17 @@ async function transcribeChunk({
   if (!result.ok) throw modelError(result.status, result.body);
 
   const candidateParts = result.json?.candidates?.[0]?.content?.parts;
+  if (transcriptionConfig && Array.isArray(candidateParts)) {
+    const words = candidateParts.flatMap(part => part.audioTranscription?.words || []);
+    if (words.length) return groupWords(words, durationMs);
+    // 未返回词级时间戳时整段铺满分片，至少不丢原文
+    const plain = candidateParts.map(part => part.text || part.audioTranscription?.text || '').join('').trim();
+    return plain ? [{ startMs: 0, endMs: Math.max(1000, durationMs), text: plain }] : [];
+  }
   const text = Array.isArray(candidateParts)
     ? candidateParts.map(part => part.text || '').join('')
     : result.body;
   return parseSegments(text, durationMs);
 }
 
-module.exports = { transcribeChunk, baseEndpoint, parseSegments, parseTimeMs };
+module.exports = { transcribeChunk, baseEndpoint, parseSegments, parseTimeMs, groupWords, languageCode };
