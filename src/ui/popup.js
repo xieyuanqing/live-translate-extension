@@ -161,7 +161,9 @@
     renderAsrModelSelect(picker);
 
     const working = ['downloading', 'transcribing', 'reading', 'translating'].includes(v.phase);
-    const pct = v.total ? Math.round((v.done / v.total) * 100) : (Number(v.progress) || 0);
+    const pct = v.phase === 'transcribing' || v.phase === 'downloading'
+      ? (Number(v.progress) || 0)
+      : (v.total ? Math.round((v.done / v.total) * 100) : (Number(v.progress) || 0));
     const target = LT.targetLabel(v.targetLang || settings.targetLang);
     const stale = v.staleConfig || (v.targetLang && v.targetLang !== settings.targetLang);
     let state = '';
@@ -170,11 +172,15 @@
     switch (v.phase) {
       case 'downloading':
         state = v.stage || 'VPS 下载音频中…';
-        hint = '正在由云端 VPS 拉取音频并准备转写';
+        hint = '正在由云端 VPS 拉取音频并准备首段切片';
         break;
       case 'transcribing':
-        state = v.stage || `VPS 转写中${pct ? ` ${pct}%` : '…'}`;
-        hint = '步骤 1：云端转写模型正在生成高精度原文时间轴';
+        state = v.frontierIdx >= 0
+          ? `边转边译 · ${v.stage || `${pct}%`} · 可看到 ${fmtClock(v.frontierMs)}`
+          : (v.stage || `VPS 转写中${pct ? ` ${pct}%` : '…'}`);
+        hint = v.frontierIdx >= 0
+          ? '已并行边转边译：当前可正常观看双语字幕，后续段后台继续补全'
+          : '云端按段异步转写，首段完成后将立刻翻译上屏';
         break;
       case 'reading':
         state = '读取原文中…';

@@ -1,7 +1,7 @@
 # 流译 VPS 音频转写服务
 
 供「流译」扩展视频翻译（步骤 1）使用的自托管音频转写服务。
-服务接收扩展提交的 YouTube 视频链接或 ID，通过 `yt-dlp` 下载纯音频，`ffmpeg` 按静音点切分成 48kbps 单声道 MP3，再并发调用云端转写模型（默认 **Gemini 3.5 Transcribe**，支持自定义中转站与 OpenAI 兼容接口，并预留第三方适配器入口），最后合并时间戳并返回给扩展，同时将原文结果缓存到本地 `cacheDir`。
+服务接收扩展提交的 YouTube 视频链接或 ID，通过 `yt-dlp` 下载纯音频，快速读取时长后按首段优先的队列切分，并行调用云端转写模型。每个分片完成后即可通过任务接口增量读取，全部完成后合并时间戳并缓存到本地 `cacheDir`。
 
 ## 环境要求
 
@@ -20,6 +20,7 @@ cp config.example.json config.json
    - `authToken`：强烈建议设置一串随机令牌，扩展设置页填入相同令牌（请求头 `Authorization: Bearer <token>`）。
    - `defaultModel`：扩展选「使用后端默认」时采用的模型 ID。
    - `models`：数组中每个 `enabled: true` 的条目都会通过 `/health` 和 `/api/models` 暴露给扩展前端选择。
+   - `headChunkSeconds`、`chunkSeconds`、`cutConcurrency`、`chunkConcurrency` 控制首段长度、常规分片长度及切段和转写并发度。`ytDlpFormat` 可降低长视频下载码率。
 
 3. 启动服务：
 
@@ -39,6 +40,7 @@ node server.js
 - `baseUrl` 填写官方域名 `https://generativelanguage.googleapis.com` 或你的 Gemini 中转站域名（是否带 `/v1beta` 后缀均可，服务会自动拼出 `/v1beta/models/{apiModel}:generateContent`）。
 - 默认使用 `x-goog-api-key: <apiKey>` 鉴权；如果你的中转站要求 `Authorization: Bearer ...`，可在该模型条目的 `headers` 中显式配置 `Authorization`，服务会自动以它为准，不再重复注入 `x-goog-api-key`。
 - 如需覆盖 `generationConfig`（例如关闭 `responseMimeType` 或调整参数），可写在 `extra.generationConfig` 中。
+- Gemini 3.5 Transcribe 可在 `extra.audioTranscriptionConfig` 中启用 `{ "wordTimestamp": true }`，服务会据此请求词级时间戳。
 
 ### 2. OpenAI 兼容转写接口（`provider: "openai-audio"`）
 
@@ -84,8 +86,8 @@ async function transcribeChunk({ audioBuffer, mimeType, durationMs, sourceLang, 
 | --- | --- |
 | `GET /health` | 健康检查，同时返回 `defaultModel` 与启用的 `models` 清单（不含密钥） |
 | `GET /api/models` | 返回 `defaultModel` 与启用的 `models` 清单 |
-| `POST /api/transcribe` | 提交转写 `{ videoId 或 url, sourceLang, model, context, force }`；命中缓存返回 `200 + units`，新任务返回 `202 + jobId` |
-| `GET /api/jobs/:jobId` | 查询任务状态、进度 `progress`、阶段文案 `stage`、完成后的 `units` 或错误 `error` |
+| `POST /api/transcribe` | 提交转写 `{ videoId 或 url, sourceLang, model, context, force, preferMs }`；命中缓存返回 `200 + units`，新任务返回 `202 + jobId` |
+| `GET /api/jobs/:jobId?afterSeq=N` | 查询状态及 `totalChunks`、`doneChunks`、`seq`。`chunks` 返回序号大于 N 的已完成分片，任务完成时 `units` 返回完整结果 |
 | `POST /api/jobs/:jobId/cancel` | 取消进行中的任务 |
 
 ## Docker / systemd 部署示例

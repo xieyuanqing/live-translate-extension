@@ -191,3 +191,72 @@ test('VPS 轮询中止会通知服务端取消，连续断线 3 次或 401/404 �
   );
   assert.equal(authTries, 1);
 });
+
+test('VPS 增量分片轮询：传 preferMs、按 afterSeq 增量回调 onChunk 且不重复', async () => {
+  const seenUrls = [];
+  const sentBodies = [];
+  const receivedChunks = [];
+  let poll = 0;
+  const v = harness(async ({ url, body }) => {
+    seenUrls.push(url);
+    if (body) sentBodies.push(JSON.parse(body));
+    if (url.endsWith('/api/transcribe')) {
+      return { ok: true, status: 202, text: JSON.stringify({ jobId: 'job-stream', status: 'queued' }) };
+    }
+    if (url.includes('/api/jobs/job-stream')) {
+      poll++;
+      if (poll === 1) {
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            status: 'transcribing',
+            progress: 50,
+            stage: '正在转写 1/2 段',
+            totalChunks: 2,
+            doneChunks: 1,
+            seq: 1,
+            chunks: [{ seq: 1, index: 0, startMs: 0, endMs: 60000, units: [{ startMs: 500, endMs: 2000, text: '第一段' }] }],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: JSON.stringify({
+          status: 'done',
+          progress: 100,
+          stage: '转写完成',
+          totalChunks: 2,
+          doneChunks: 2,
+          seq: 2,
+          chunks: [
+            { seq: 1, index: 0, startMs: 0, endMs: 60000, units: [{ startMs: 500, endMs: 2000, text: '第一段' }] },
+            { seq: 2, index: 1, startMs: 60000, endMs: 120000, units: [{ startMs: 61000, endMs: 63000, text: '第二段' }] },
+          ],
+          units: [
+            { startMs: 500, endMs: 2000, text: '第一段' },
+            { startMs: 61000, endMs: 63000, text: '第二段' },
+          ],
+        }),
+      };
+    }
+    return { ok: false, status: 404, text: '{}' };
+  });
+
+  const out = await v.transcribe({
+    baseUrl: 'https://stream.test',
+    videoId: 'vid12345678',
+    url: 'https://www.youtube.com/watch?v=vid12345678',
+    preferMs: 45000,
+    pollIntervalMs: 1,
+    onChunk: chunk => receivedChunks.push(chunk),
+  });
+  assert.equal(sentBodies[0].preferMs, 45000);
+  assert.equal(seenUrls[1], 'https://stream.test/api/jobs/job-stream');
+  assert.equal(seenUrls[2], 'https://stream.test/api/jobs/job-stream?afterSeq=1');
+  assert.equal(receivedChunks.length, 2);
+  assert.equal(receivedChunks[0].index, 0);
+  assert.equal(receivedChunks[1].index, 1);
+  assert.equal(out.streamedChunks, 2);
+});

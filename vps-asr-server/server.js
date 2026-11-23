@@ -143,7 +143,7 @@ function readJsonBody(req) {
   });
 }
 
-function viewJob(job) {
+function viewJob(job, afterSeq = 0) {
   return {
     ok: true,
     jobId: job.jobId,
@@ -153,7 +153,11 @@ function viewJob(job) {
     model: job.model,
     provider: job.provider,
     lang: job.lang,
-    units: job.units,
+    totalChunks: job.totalChunks || 0,
+    doneChunks: job.doneChunks || 0,
+    seq: job.seq || 0,
+    chunks: (job.readyChunks || []).filter(c => c.seq > afterSeq),
+    units: job.status === 'done' ? job.units : [],
     error: job.error || ''
   };
 }
@@ -220,7 +224,9 @@ function createServer(options = {}) {
           send(404, { ok: false, error: '任务不存在' });
           return;
         }
-        send(200, viewJob(job));
+        const query = new URL(req.url, 'http://localhost').searchParams;
+        const afterSeq = Math.max(0, Number(query.get('afterSeq')) || 0);
+        send(200, viewJob(job, afterSeq));
         return;
       }
 
@@ -252,7 +258,8 @@ function createServer(options = {}) {
           sourceLang: data.sourceLang || 'auto',
           modelConfig: model,
           context: data.context,
-          force: Boolean(data.force)
+          force: Boolean(data.force),
+          preferMs: Math.max(0, Number(data.preferMs) || 0)
         });
         const job = result.job;
         const payload = {
@@ -263,7 +270,10 @@ function createServer(options = {}) {
           provider: model.provider,
           lang: job.lang,
           progress: job.progress,
-          stage: job.stage
+          stage: job.stage,
+          totalChunks: job.totalChunks || 0,
+          doneChunks: job.doneChunks || 0,
+          seq: job.seq || 0
         };
         if (result.cached) {
           payload.cached = true;

@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 
 const { createServer } = require('./server');
-const { extractVideoId } = require('./lib/media');
+const { extractVideoId, planSegments } = require('./lib/media');
 const { mergeAndNormalizeUnits } = require('./lib/jobs');
 const gemini = require('./lib/adapters/gemini');
 const openai = require('./lib/adapters/openai-audio');
@@ -313,5 +313,131 @@ test('任务缓存命中、轮询进度、失败和取消', async () => {
     assert.ok(badState.body.error.includes('missing'));
   } finally {
     failed.server.close();
+  }
+});
+
+test('planSegments 首段短切、末尾残片合并与 preferMs 片中优先排序', () => {
+  // 开头播放：首段 60s，后续 180s，末尾 10s 残片合并进前一段
+  const p0 = planSegments(430000, { headChunkSeconds: 60, chunkSeconds: 180, preferMs: 0 });
+  assert.deepEqual(
+    p0.segments.map(s => [s.index, s.startMs, s.endMs]),
+    [
+      [0, 0, 60000],
+      [1, 60000, 240000],
+      [2, 240000, 430000]
+    ]
+  );
+  assert.deepEqual(p0.priorityOrder, [0, 1, 2]);
+
+  // 片中播放（preferMs = 200s）：首段 [200s, 260s] 最先，接着向后到片尾，最后回头补 [0, 200s]
+  const pMid = planSegments(500000, { headChunkSeconds: 60, chunkSeconds: 180, preferMs: 200000 });
+  assert.equal(pMid.segments[pMid.priorityOrder[0]].startMs, 200000);
+  assert.equal(pMid.segments[pMid.priorityOrder[0]].endMs, 260000);
+  assert.equal(pMid.priorityOrder.length, pMid.segments.length);
+  assert.ok(pMid.priorityOrder.every(idx => idx >= 0 && idx < pMid.segments.length));
+  // 校验各段无缝衔接覆盖 0..500000
+  assert.equal(pMid.segments[0].startMs, 0);
+  assert.equal(pMid.segments.at(-1).endMs, 500000);
+  for (let i = 1; i < pMid.segments.length; i++) {
+    assert.equal(pMid.segments[i].startMs, pMid.segments[i - 1].endMs);
+  }
+});
+
+test('异步边切边转与增量 afterSeq 查询：首段切完立刻转写并推送，无需等待后段切完', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'asr-pipe-'));
+  let releaseSecondCut;
+  const secondCutGate = new Promise(resolve => { releaseSecondCut = resolve; });
+  let releaseSecondAsr;
+  const secondAsrGate = new Promise(resolve => { releaseSecondAsr = resolve; });
+  const events = [];
+
+  registerAdapter('test-pipe', {
+    async transcribeChunk({ index }) {
+      events.push(`asr-start-${index}`);
+      if (index === 1) await secondAsrGate;
+      events.push(`asr-done-${index}`);
+      return [{ startMs: 1000, endMs: 3000, text: `第${index}段台词` }];
+    }
+  });
+
+  const { server } = createServer({
+    config: {
+      cacheDir: dir,
+      defaultModel: 'pipe',
+      headChunkSeconds: 60,
+      chunkSeconds: 180,
+      cutConcurrency: 2,
+      chunkConcurrency: 2,
+      maxRetries: 0,
+      models: [{ id: 'pipe', label: 'Pipe', provider: 'test-pipe', enabled: true }]
+    },
+    downloadAudio: async ({ videoId }) => ({
+      videoId,
+      tempDir: dir,
+      inputPath: path.join(dir, 'fake.m4a'),
+      durationMs: 240000,
+      cleanup: async () => {}
+    }),
+    cutSegment: async ({ index, startMs, durationMs }) => {
+      events.push(`cut-start-${index}`);
+      if (index === 1) await secondCutGate;
+      events.push(`cut-done-${index}`);
+      return { index, audioBuffer: Buffer.from('mp3'), offsetMs: startMs, durationMs, mimeType: 'audio/mpeg' };
+    }
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+  const port = server.address().port;
+
+  try {
+    const created = await request(port, 'POST', '/api/transcribe', {
+      videoId: 'pipe1234567',
+      model: 'pipe',
+      preferMs: 0
+    });
+    assert.equal(created.status, 202);
+    const jobId = created.body.jobId;
+
+    // 等待第 0 段转写完并推送到 readyChunks，此时第 1 段连切段都没结束！
+    let snap1;
+    for (let i = 0; i < 40; i++) {
+      snap1 = await request(port, 'GET', `/api/jobs/${jobId}?afterSeq=0`);
+      if (snap1.body.chunks.length >= 1) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(snap1.body.status, 'transcribing');
+    assert.equal(snap1.body.totalChunks, 2);
+    assert.equal(snap1.body.doneChunks, 1);
+    assert.equal(snap1.body.chunks.length, 1);
+    assert.equal(snap1.body.chunks[0].seq, 1);
+    assert.equal(snap1.body.chunks[0].index, 0);
+    assert.deepEqual(snap1.body.chunks[0].units, [{ startMs: 1000, endMs: 3000, text: '第0段台词' }]);
+    assert.ok(events.includes('asr-done-0'), '第 0 段必须在第 1 段切段完成前就完成转写');
+    assert.equal(events.includes('cut-done-1'), false);
+
+    // 用 afterSeq=1 再查，尚无新段应返回空数组
+    const snapEmpty = await request(port, 'GET', `/api/jobs/${jobId}?afterSeq=1`);
+    assert.equal(snapEmpty.body.chunks.length, 0);
+
+    // 放行第 1 段切段与转写
+    releaseSecondCut();
+    releaseSecondAsr();
+
+    let snap2;
+    for (let i = 0; i < 40; i++) {
+      snap2 = await request(port, 'GET', `/api/jobs/${jobId}?afterSeq=1`);
+      if (snap2.body.status === 'done') break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(snap2.body.status, 'done');
+    assert.equal(snap2.body.chunks.length, 1);
+    assert.equal(snap2.body.chunks[0].seq, 2);
+    assert.equal(snap2.body.chunks[0].index, 1);
+    assert.deepEqual(snap2.body.units, [
+      { startMs: 1000, endMs: 3000, text: '第0段台词' },
+      { startMs: 61000, endMs: 63000, text: '第1段台词' }
+    ]);
+  } finally {
+    server.close();
   }
 });

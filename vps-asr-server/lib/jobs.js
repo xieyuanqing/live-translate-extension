@@ -3,7 +3,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
-const { prepareChunks } = require('./media');
+const { prepareChunks, downloadAudio, planSegments, cutSegment, cutAllFallback } = require('./media');
 const { getAdapter } = require('./adapters');
 
 const MAX_STORED_JOBS = 200;
@@ -29,6 +29,24 @@ function sleep(ms, signal) {
     };
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function createSemaphore(limit) {
+  let active = 0;
+  const waiting = [];
+  return async function withLimit(fn) {
+    if (active >= limit) {
+      await new Promise(resolve => waiting.push(resolve));
+    }
+    active += 1;
+    try {
+      return await fn();
+    } finally {
+      active -= 1;
+      const next = waiting.shift();
+      if (next) next();
+    }
+  };
 }
 
 function mergeAndNormalizeUnits(rawUnits) {
@@ -65,6 +83,10 @@ class JobManager {
     this.cacheDir = config.cacheDir || path.join(__dirname, '..', 'cache');
     this.jobs = new Map();
     this.active = new Map();
+    this.customPrepareChunks = options.prepareChunks || null;
+    this.downloadAudio = options.downloadAudio || downloadAudio;
+    this.cutSegment = options.cutSegment || cutSegment;
+    this.cutAllFallback = options.cutAllFallback || cutAllFallback;
     this.prepareChunks = options.prepareChunks || prepareChunks;
   }
 
@@ -110,6 +132,10 @@ class JobManager {
       progress: status === 'done' ? 100 : 0,
       stage: status === 'done' ? '命中服务端缓存' : '已加入队列',
       units,
+      totalChunks: 0,
+      doneChunks: 0,
+      seq: 0,
+      readyChunks: [],
       error: '',
       key: cacheKey,
       controller: new AbortController()
@@ -119,7 +145,7 @@ class JobManager {
     return job;
   }
 
-  async create({ videoId, url, sourceLang, modelConfig, context, force = false }) {
+  async create({ videoId, url, sourceLang, modelConfig, context, force = false, preferMs = 0 }) {
     const lang = sourceLang || 'auto';
     const cacheKey = this.key(videoId, lang, modelConfig.id);
 
@@ -135,12 +161,16 @@ class JobManager {
 
     const activeId = this.active.get(cacheKey);
     if (activeId && this.jobs.has(activeId)) {
-      return { cached: false, job: this.jobs.get(activeId) };
+      const existing = this.jobs.get(activeId);
+      if (preferMs > 0 && typeof existing.reprioritize === 'function') {
+        existing.reprioritize(preferMs);
+      }
+      return { cached: false, job: existing };
     }
 
     const job = this.makeJob(videoId, lang, modelConfig, [], cacheKey, 'queued');
     this.active.set(cacheKey, job.jobId);
-    this.run(job, { videoId, url, sourceLang: lang, modelConfig, context });
+    this.run(job, { videoId, url, sourceLang: lang, modelConfig, context, preferMs });
     return { cached: false, job };
   }
 
@@ -148,19 +178,60 @@ class JobManager {
     const controller = job.controller;
     const signal = controller.signal;
     const maxRetries = Math.max(0, Number(this.config.maxRetries ?? 2));
-    const concurrency = Math.max(1, Number(this.config.chunkConcurrency) || 3);
+    const concurrency = Math.max(1, Number(this.config.chunkConcurrency) || 4);
+    const cutConcurrency = Math.max(1, Number(this.config.cutConcurrency) || 2);
+    const withCutLimit = createSemaphore(cutConcurrency);
+    let descriptor = null;
 
     try {
       job.status = 'downloading';
-      job.stage = '正在下载和切段';
-      const prepared = await this.prepareChunks({
-        ...args,
-        config: this.config,
-        signal,
-        onStage: stage => {
-          if (!signal.aborted) job.stage = stage;
+      job.stage = '正在下载音频';
+
+      let queue = [];
+      let needsCut = false;
+
+      if (this.customPrepareChunks) {
+        const prepared = await this.customPrepareChunks({
+          ...args,
+          config: this.config,
+          signal,
+          onStage: stage => {
+            if (!signal.aborted) job.stage = stage;
+          }
+        });
+        queue = (prepared.chunks || []).map((chunk, idx) => ({
+          ...chunk,
+          index: Number.isInteger(chunk.index) ? chunk.index : idx,
+          startMs: chunk.offsetMs ?? chunk.startMs ?? 0
+        }));
+      } else {
+        descriptor = await this.downloadAudio({
+          ...args,
+          config: this.config,
+          signal,
+          onStage: stage => {
+            if (!signal.aborted) job.stage = stage;
+          }
+        });
+        if (signal.aborted) throw new Error('任务已取消');
+
+        if (descriptor.durationMs > 0) {
+          const plan = planSegments(descriptor.durationMs, {
+            headChunkSeconds: this.config.headChunkSeconds,
+            chunkSeconds: this.config.chunkSeconds,
+            preferMs: args.preferMs
+          });
+          queue = plan.priorityOrder.map(i => plan.segments[i]);
+          needsCut = true;
+        } else {
+          queue = await this.cutAllFallback({
+            inputPath: descriptor.inputPath,
+            tempDir: descriptor.tempDir,
+            config: this.config,
+            signal
+          });
         }
-      });
+      }
 
       if (signal.aborted) throw new Error('任务已取消');
 
@@ -169,51 +240,96 @@ class JobManager {
         throw new Error(`未注册转写适配器：${args.modelConfig.provider}`);
       }
 
-      const chunks = prepared.chunks || [];
-      const total = chunks.length;
+      const total = queue.length;
+      job.totalChunks = total;
       job.status = 'transcribing';
       job.stage = total ? `正在转写 0/${total} 段` : '无音频分片';
 
+      // 支持中途收到新的 preferMs 时把尚未开始的分片按距离重排
+      job.reprioritize = targetMs => {
+        if (!queue.length) return;
+        queue.sort((a, b) => {
+          const aStart = a.startMs ?? a.offsetMs ?? 0;
+          const bStart = b.startMs ?? b.offsetMs ?? 0;
+          const aFwd = aStart >= targetMs ? 0 : 1;
+          const bFwd = bStart >= targetMs ? 0 : 1;
+          if (aFwd !== bFwd) return aFwd - bFwd;
+          return aStart - bStart;
+        });
+      };
+
       const collected = [];
       let done = 0;
-      const queue = chunks.slice();
 
       const worker = async () => {
         while (queue.length) {
           if (signal.aborted) throw new Error('任务已取消');
-          const chunk = queue.shift();
+          const seg = queue.shift();
+          if (!seg) break;
+
+          const actual = needsCut
+            ? await withCutLimit(() =>
+                this.cutSegment({
+                  inputPath: descriptor.inputPath,
+                  tempDir: descriptor.tempDir,
+                  index: seg.index,
+                  startMs: seg.startMs,
+                  durationMs: seg.durationMs,
+                  config: this.config,
+                  signal
+                })
+              )
+            : seg;
+
+          if (signal.aborted) throw new Error('任务已取消');
+
+          const segOffset = actual.offsetMs ?? seg.startMs ?? 0;
+          const segDuration = actual.durationMs ?? seg.durationMs ?? 0;
+          let chunkRows = [];
           let lastError = null;
 
-          for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            if (signal.aborted) throw new Error('任务已取消');
-            try {
-              const rows = await adapter.transcribeChunk({
-                ...chunk,
-                sourceLang: args.sourceLang,
-                context: args.context,
-                modelConfig: args.modelConfig,
-                signal
-              });
-              for (const row of rows || []) {
-                collected.push({
-                  startMs: chunk.offsetMs + row.startMs,
-                  endMs: chunk.offsetMs + row.endMs,
-                  text: row.text
+          if (actual.audioBuffer && actual.audioBuffer.length > 0) {
+            for (let attempt = 0; attempt <= maxRetries; attempt++) {
+              if (signal.aborted) throw new Error('任务已取消');
+              try {
+                const rows = await adapter.transcribeChunk({
+                  ...actual,
+                  offsetMs: segOffset,
+                  durationMs: segDuration,
+                  sourceLang: args.sourceLang,
+                  context: args.context,
+                  modelConfig: args.modelConfig,
+                  signal
                 });
-              }
-              lastError = null;
-              break;
-            } catch (err) {
-              lastError = err;
-              if (signal.aborted || NON_RETRYABLE_STATUS.has(err.status) || attempt >= maxRetries) {
+                chunkRows = (rows || []).map(row => ({
+                  startMs: segOffset + row.startMs,
+                  endMs: segOffset + row.endMs,
+                  text: row.text
+                }));
+                lastError = null;
                 break;
+              } catch (err) {
+                lastError = err;
+                if (signal.aborted || NON_RETRYABLE_STATUS.has(err.status) || attempt >= maxRetries) {
+                  break;
+                }
+                await sleep(300 * (2 ** attempt), signal);
               }
-              await sleep(300 * (2 ** attempt), signal);
             }
+            if (lastError) throw lastError;
           }
 
-          if (lastError) throw lastError;
+          const readyUnits = mergeAndNormalizeUnits(chunkRows);
+          collected.push(...readyUnits);
           done += 1;
+          job.doneChunks = done;
+          job.readyChunks.push({
+            seq: ++job.seq,
+            index: seg.index,
+            startMs: segOffset,
+            endMs: segOffset + segDuration,
+            units: readyUnits
+          });
           job.progress = total ? Math.min(99, Math.round((done / total) * 100)) : 100;
           job.stage = `正在转写 ${done}/${total} 段`;
         }
@@ -244,6 +360,8 @@ class JobManager {
         job.stage = '转写失败';
       }
     } finally {
+      delete job.reprioritize;
+      if (descriptor) await descriptor.cleanup();
       if (this.active.get(job.key) === job.jobId) {
         this.active.delete(job.key);
       }

@@ -306,7 +306,9 @@ globalThis.LT = globalThis.LT || {};
             : video.phase === 'partial' ? '继续翻译' : '翻译字幕';
         statusDesc = working
           ? (video.phase === 'downloading' || video.phase === 'transcribing'
-              ? (video.stage || (video.phase === 'downloading' ? 'VPS 下载音频中…' : `VPS 转写中${video.progress ? ` ${video.progress}%` : '…'}`))
+              ? (video.frontierIdx >= 0
+                  ? `边转边译 · ${video.stage || `${video.progress || 0}%`}`
+                  : (video.stage || (video.phase === 'downloading' ? 'VPS 下载音频中…' : `VPS 转写中${video.progress ? ` ${video.progress}%` : '…'}`)))
               : (video.total ? `翻译中 · ${video.done || 0}/${video.total} 块` : '正在读取并分句…'))
           : video.phase === 'ready' ? '整片字幕已就绪'
             : video.phase === 'partial' ? `已完成 ${video.done || 0}/${video.total || 0} 块`

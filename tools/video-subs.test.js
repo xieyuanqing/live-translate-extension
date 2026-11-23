@@ -467,3 +467,118 @@ test('auto 模式：仅有自动字幕时走 VPS，有人工作字幕时走字�
   assert.equal(h.ctrl.phase, 'ready');
   assert.equal(h.ctrl.sourceKind, 'youtube');
 });
+
+test('VPS 全异步边转边译：首段一转写完立刻翻译上屏，不等后段完成；乱序到达不串位且完整落盘缓存', async () => {
+  const h = harness({ unitCount: 2 });
+  let releaseSecond;
+  const secondGate = new Promise(resolve => { releaseSecond = resolve; });
+  h.settings.videoTranscriptMode = 'vps';
+  h.settings.videoAsrBaseUrl = 'https://asr.example.com';
+  h.settings.videoAsrModel = 'gemini-3.5-transcribe';
+  h.settings.textConcurrency = 2;
+
+  // 自定义翻译返回：按原文内容回显，方便验证乱序到达绝不串位
+  h.translate = user => {
+    const section = user.split('【需要翻译】')[1].split('【后文参考')[0];
+    const lines = [...section.matchAll(/^(\d+)\t(.+)$/gm)].map(m => `${m[1]}\t中:${m[2]}`);
+    return { text: lines.join('\n'), finishReason: 'STOP' };
+  };
+
+  h.LT.VpsAsr = {
+    transcribe: async args => {
+      args.onProgress({ status: 'downloading', progress: 0, stage: '正在下载音频', totalChunks: 0, doneChunks: 0 });
+      // 先吐出第 0 段（0..60s），此时第 1 段仍在转写中
+      args.onChunk({
+        seq: 1,
+        index: 0,
+        startMs: 0,
+        endMs: 60000,
+        units: [
+          { id: 1, start: 1000, end: 3000, text: '首段第一句' },
+          { id: 2, start: 4000, end: 6000, text: '首段第二句' },
+        ],
+      });
+      args.onProgress({ status: 'transcribing', progress: 33, stage: '正在转写 1/3 段', totalChunks: 3, doneChunks: 1 });
+      await secondGate;
+      // 模拟乱序：第 2 段先于第 1 段到达
+      args.onChunk({
+        seq: 2,
+        index: 2,
+        startMs: 120000,
+        endMs: 180000,
+        units: [{ id: 1, start: 121000, end: 124000, text: '第三段句' }],
+      });
+      args.onChunk({
+        seq: 3,
+        index: 1,
+        startMs: 60000,
+        endMs: 120000,
+        units: [{ id: 1, start: 61000, end: 64000, text: '第二段句' }],
+      });
+      return {
+        model: 'gemini-3.5-transcribe',
+        provider: 'gemini',
+        lang: 'ja',
+        cached: false,
+        streamedChunks: 3,
+        units: [],
+      };
+    },
+  };
+
+  const pending = h.start();
+  // 等待首段翻译完成，此时 VPS 第 1、2 段还未放行！
+  for (let i = 0; i < 40 && h.ctrl.texts[0] == null; i++) await flush();
+  assert.equal(h.ctrl.phase, 'transcribing');
+  assert.equal(h.ctrl.texts[0], '中:首段第一句', '首段必须在后段转写完前就翻译完成');
+  h.video.currentTime = 2;
+  h.ctrl.tick();
+  assert.deepEqual(h.caption.shown.at(-1), ['中:首段第一句', '首段第一句']);
+  assert.equal(h.ctrl.status().frontierIdx, 1);
+
+  releaseSecond();
+  await pending;
+  assert.equal(h.ctrl.phase, 'ready');
+  assert.deepEqual([...h.ctrl.texts], ['中:首段第一句', '中:首段第二句', '中:第二段句', '中:第三段句']);
+  assert.deepEqual(Array.from(h.ctrl.units, u => u.text), ['首段第一句', '首段第二句', '第二段句', '第三段句']);
+
+  // 再次打开同一视频：直接命中本机缓存，零请求
+  const again = harness({ unitCount: 2, storage: h.storage });
+  again.settings.videoTranscriptMode = 'vps';
+  again.settings.videoAsrBaseUrl = 'https://asr.example.com';
+  again.settings.videoAsrModel = 'gemini-3.5-transcribe';
+  await again.ctrl.onVideoChanged('vid-A', again.settings);
+  assert.equal(again.ctrl.phase, 'ready');
+  assert.equal(again.ctrl.fromCache, true);
+  assert.deepEqual([...again.ctrl.texts], ['中:首段第一句', '中:首段第二句', '中:第二段句', '中:第三段句']);
+});
+
+test('VPS 流式翻译期间文字模型致命错误会立即中止 VPS 任务', async () => {
+  const h = harness({ unitCount: 2 });
+  let vpsAborted = false;
+  h.settings.videoTranscriptMode = 'vps';
+  h.settings.videoAsrBaseUrl = 'https://asr.example.com';
+  h.translate = () => { throw new h.RequestError('API Key 无效', { status: 401, fatal: true }); };
+  h.LT.VpsAsr = {
+    transcribe: async args => {
+      args.onChunk({
+        seq: 1,
+        index: 0,
+        startMs: 0,
+        endMs: 60000,
+        units: [{ id: 1, start: 1000, end: 2000, text: '触发 401' }],
+      });
+      await new Promise((_, reject) => {
+        args.signal.addEventListener('abort', () => {
+          vpsAborted = true;
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    },
+  };
+
+  await h.start();
+  assert.equal(vpsAborted, true);
+  assert.equal(h.ctrl.phase, 'error');
+  assert.match(h.ctrl.error, /API Key 无效/);
+});

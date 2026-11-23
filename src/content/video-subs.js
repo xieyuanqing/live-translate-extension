@@ -61,10 +61,12 @@ globalThis.LT = globalThis.LT || {};
 
     reset(videoId) {
       this.videoId = videoId;
-      this.phase = 'idle'; // idle | reading | translating | ready | partial | error
+      this.phase = 'idle'; // idle | reading | downloading | transcribing | translating | ready | partial | error
       this.progress = 0;
       this.stage = '';
       this.sourceKind = '';
+      this.asrTotal = 0;
+      this.asrDone = 0;
       this.error = '';
       this.units = null; // [{id,start,end,text}]
       this.texts = []; // 与 units 对齐的译文，未翻为 undefined
@@ -129,12 +131,18 @@ globalThis.LT = globalThis.LT || {};
         requests: this.requests,
         model: this.meta ? this.meta.model : this.config ? this.config.model : '',
         targetLang: this.meta ? this.meta.targetLang : '',
-        progress: this.progress, stage: this.stage, sourceKind: this.sourceKind,
+        progress: this.progress,
+        stage: this.stage,
+        sourceKind: this.sourceKind,
+        asrTotal: this.asrTotal,
+        asrDone: this.asrDone,
       };
     }
 
     emit() {
-      if (this.phase === 'translating') this.progressNote();
+      if (this.phase === 'translating' || (this.phase === 'transcribing' && this.units && this.units.length)) {
+        this.progressNote();
+      }
       try {
         this.onStatus();
       } catch (err) {
@@ -152,9 +160,15 @@ globalThis.LT = globalThis.LT || {};
       if (now - this.lastNoteAt < 1000) return;
       this.lastNoteAt = now;
       const s = this.status();
-      const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
       const where = s.frontierIdx >= 0 ? `可看到 ${fmtClock(s.frontierMs)}` : '正在翻译当前位置…';
-      const text = `流译：整片翻译中 ${pct}% · ${where}`;
+      let text;
+      if (this.phase === 'transcribing') {
+        const asrPart = this.stage || (this.asrTotal ? `转写 ${this.asrDone}/${this.asrTotal} 段` : `转写 ${this.progress}%`);
+        text = `流译：边转边译 · ${asrPart} · ${where}`;
+      } else {
+        const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+        text = `流译：整片翻译中 ${pct}% · ${where}`;
+      }
       if (text !== this.lastNote) this.note(text, 'warn', false);
     }
 
@@ -326,8 +340,8 @@ globalThis.LT = globalThis.LT || {};
 
       try {
         const run = { videoId, settings, meta, tempContext, force, gen, config: LT.TextModel.resolve(settings, settings.subsProviderId, settings.subsModel) };
-        const source = await this.loadSource(videoId, settings, run.meta, tempContext, force, alive);
-        if (!source || !alive()) return;
+        const source = await this.loadSource(run, alive);
+        if (!source || !alive() || source.streamFinished) return;
 
         const prompt = this.buildPromptAndFingerprint(run, source);
 
@@ -345,8 +359,32 @@ globalThis.LT = globalThis.LT || {};
       }
     }
 
-    async loadSource(videoId, settings, meta, tempContext, force, alive) {
-      if (typeof meta === 'function') { alive = meta; meta = null; tempContext = ''; force = false; }
+    requireTextModel(config) {
+      if (!LT.TextModel.hasCredentials(config)) throw new Error('未配置 API Key 或鉴权请求头，请在扩展设置里填写');
+      if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
+    }
+
+    async loadSource(runOrVideoId, settingsOrAlive, meta, tempContext, force, alive) {
+      let run;
+      if (runOrVideoId && typeof runOrVideoId === 'object') {
+        run = runOrVideoId;
+        alive = settingsOrAlive;
+      } else {
+        if (typeof meta === 'function') { alive = meta; meta = null; tempContext = ''; force = false; }
+        run = {
+          videoId: runOrVideoId,
+          settings: settingsOrAlive,
+          meta,
+          tempContext,
+          force,
+          config: LT.TextModel.resolve(settingsOrAlive, settingsOrAlive.subsProviderId, settingsOrAlive.subsModel),
+        };
+      }
+      const { videoId, settings } = run;
+      const runMeta = run.meta;
+      const runTemp = run.tempContext;
+      const runForce = !!run.force;
+
       let cachedMeta = (await LT.SubsCache.getMeta(videoId)) || null;
       if (!alive()) return null;
       let units = null;
@@ -358,12 +396,12 @@ globalThis.LT = globalThis.LT || {};
         if (!alive()) return null;
         const mode = settings.videoTranscriptMode || 'auto';
         const vpsTrack = String(cachedMeta.trackKey).startsWith('vps|');
-        const modelFits = !settings.videoAsrModel || !vpsTrack || String(cachedMeta.trackKey).endsWith(`|${settings.videoAsrModel}`) || force;
+        const modelFits = !settings.videoAsrModel || !vpsTrack || String(cachedMeta.trackKey).endsWith(`|${settings.videoAsrModel}`) || runForce;
         const autoUpgrade = mode === 'auto' && !!settings.videoAsrBaseUrl && !!src.isAsr;
         const fits =
           validSource(src) &&
           (settings.sourceLang === 'auto' || langBase(src.lang) === langBase(settings.sourceLang)) &&
-          (mode !== 'vps' || vpsTrack) && (mode !== 'youtube' || !vpsTrack) && modelFits && !force && !autoUpgrade;
+          (mode !== 'vps' || vpsTrack) && (mode !== 'youtube' || !vpsTrack) && modelFits && !runForce && !autoUpgrade;
         if (fits) {
           units = unpack(src.units);
           trackKey = cachedMeta.trackKey;
@@ -373,12 +411,12 @@ globalThis.LT = globalThis.LT || {};
       }
       if (!units) {
         // 原文失效后编号可能完全变化，不能走「旧设置缓存」的复用路径。
-        if (!force) cachedMeta = null;
+        if (!runForce) cachedMeta = null;
         let read;
         const mode = settings.videoTranscriptMode || 'auto';
         if (mode === 'vps') {
           if (!settings.videoAsrBaseUrl) throw new Error('已选择强制云端转写，但尚未配置 VPS 服务地址，请前往设置 → 视频翻译填写');
-          read = await this.readFromVps(videoId, settings, meta, tempContext, force, alive);
+          read = await this.streamFromVps(run, cachedMeta, alive);
         } else if (mode === 'auto') {
           const info = await LT.YouTube.captionTracks();
           if (!alive()) return null;
@@ -386,11 +424,12 @@ globalThis.LT = globalThis.LT || {};
             t => t.kind !== 'asr' && (settings.sourceLang === 'auto' || langBase(t.languageCode) === langBase(settings.sourceLang))
           );
           if (human || !settings.videoAsrBaseUrl) read = await this.readTrack(videoId, settings, alive);
-          else read = await this.readFromVps(videoId, settings, meta, tempContext, force, alive);
+          else read = await this.streamFromVps(run, cachedMeta, alive);
         } else {
           read = await this.readTrack(videoId, settings, alive);
         }
         if (!read) return null;
+        if (read.streamFinished) return read;
         ({ units, trackKey, trackLabel, isAsr } = read);
       }
       const sourceHash = LT.SubsCache.fingerprint(pack(units));
@@ -414,22 +453,180 @@ globalThis.LT = globalThis.LT || {};
       return parts.join('\n\n').slice(0, 1500);
     }
 
-    async readFromVps(videoId, settings, meta, tempContext, force, alive) {
+    /**
+     * 全异步并行 VPS 转写 + 实时分片翻译流水线：
+     * VPS 每完成一个音频分片，扩展立刻并行启动文字翻译并上屏，无需等待全片转写完成。
+     * 若命中 VPS 服务端缓存（无增量分片）则回落到标准整片翻译路径。
+     */
+    async streamFromVps(run, cachedMeta, alive) {
+      const { videoId, settings, meta, tempContext, force, config } = run;
+      this.requireTextModel(config);
+
+      const scene = LT.Settings.scene(settings);
+      const metadataText = settings.useMetadata ? LT.Prompt.formatMetadata(meta, settings.metadataLimit) : '';
+      const system = LT.Prompt.buildSubs({
+        scene,
+        sourceLang: settings.sourceLang,
+        targetLang: settings.targetLang,
+        isAsr: false,
+        metadataText,
+        manualContext: settings.manualContext,
+        tempContext,
+        extraInstruction: settings.subsExtraInstruction,
+      });
+
+      this.config = config;
+      this.system = system;
       this.phase = 'downloading';
       this.stage = '正在连接 VPS 转写服务…';
       this.progress = 0;
+      this.asrTotal = 0;
+      this.asrDone = 0;
       this.sourceKind = 'vps';
+      this.isAsr = false;
+      this.units = null;
+      this.texts = [];
+      this.chunks = [];
+      this.states = [];
+      this.lastIdx = -2;
       this.note(`流译：${this.stage}`, 'warn', false);
       this.emit();
 
-      const controller = new AbortController();
-      this.controllers.add(controller);
+      const streamSegs = new Map();
+      let vpsDone = false;
+      let waiters = [];
+      const wakeWorkers = () => {
+        const list = waiters;
+        waiters = [];
+        for (const fn of list) fn();
+      };
+      const waitWork = () => new Promise(resolve => waiters.push(resolve));
+
+      const rebuildTimeline = () => {
+        const ordered = [...streamSegs.values()].sort((a, b) => a.index - b.index);
+        const flatUnits = [];
+        const flatTexts = [];
+        const flatChunks = [];
+        const flatStates = [];
+        let lastStart = 0;
+        for (const seg of ordered) {
+          const baseOffset = flatUnits.length;
+          for (let i = 0; i < seg.units.length; i++) {
+            const u = seg.units[i];
+            const s = Math.max(lastStart, u.start);
+            const e = Math.max(s, u.end);
+            flatUnits.push({ id: flatUnits.length + 1, start: s, end: e, text: u.text });
+            flatTexts.push(seg.texts[i]);
+            lastStart = s;
+          }
+          for (let i = 0; i < seg.chunks.length; i++) {
+            const c = seg.chunks[i];
+            flatChunks.push({ i: flatChunks.length, from: baseOffset + c.from, to: baseOffset + c.to });
+            flatStates.push(seg.states[i]);
+          }
+        }
+        this.units = flatUnits.length ? flatUnits : null;
+        this.texts = flatTexts;
+        this.chunks = flatChunks;
+        this.states = flatStates;
+        this.lastIdx = -2;
+      };
+
+      const pickStreamWork = () => {
+        const video = this.getVideo();
+        const posMs = video ? video.currentTime * 1000 : 0;
+        let containing = null;
+        let nearestForward = null;
+        let nearestForwardDelta = Infinity;
+        let earliest = null;
+        let earliestStart = Infinity;
+
+        for (const seg of streamSegs.values()) {
+          for (let ci = 0; ci < seg.chunks.length; ci++) {
+            if (seg.states[ci] !== 'pending') continue;
+            const c = seg.chunks[ci];
+            const first = seg.units[c.from];
+            const last = seg.units[c.to];
+            if (!first || !last) continue;
+            if (posMs >= first.start && posMs <= last.end) {
+              containing = { seg, chunkIdx: ci };
+              break;
+            }
+            if (first.start >= posMs && first.start - posMs < nearestForwardDelta) {
+              nearestForwardDelta = first.start - posMs;
+              nearestForward = { seg, chunkIdx: ci };
+            }
+            if (first.start < earliestStart) {
+              earliestStart = first.start;
+              earliest = { seg, chunkIdx: ci };
+            }
+          }
+          if (containing) break;
+        }
+        return containing || nearestForward || earliest;
+      };
+
+      const streamWorker = async () => {
+        for (;;) {
+          if (!alive() || this.fatal) return;
+          const pick = pickStreamWork();
+          if (!pick) {
+            if (vpsDone) return;
+            await waitWork();
+            continue;
+          }
+          const { seg, chunkIdx } = pick;
+          const chunk = seg.chunks[chunkIdx];
+          seg.states[chunkIdx] = 'running';
+          try {
+            const video = this.getVideo();
+            const posMs = video ? video.currentTime * 1000 : 0;
+            const posIdx = LT.SubsScheduler.nextIndexFrom(seg.units, posMs);
+            for (const [from, to] of LT.Chunker.ranges(chunk, posIdx, LT.SUBS.HEAD_UNITS)) {
+              await this.translateRangeOn(seg.units, seg.texts, alive, from, to, 0, () => {
+                rebuildTimeline();
+                this.emit();
+              });
+            }
+            if (!alive()) return;
+            let complete = true;
+            for (let k = chunk.from; k <= chunk.to; k++) {
+              if (seg.texts[k] == null) complete = false;
+            }
+            seg.states[chunkIdx] = complete ? 'done' : 'failed';
+          } catch (err) {
+            if (!alive() || isAbort(err)) return;
+            if (err && err.fatal) {
+              this.fatal = err;
+              seg.states[chunkIdx] = 'pending';
+              this.abortAll();
+              wakeWorkers();
+              return;
+            }
+            console.warn(`[流译] 流式片段 ${seg.index}-${chunkIdx} 失败：${err && err.message}`);
+            seg.states[chunkIdx] = 'failed';
+          }
+          rebuildTimeline();
+          this.emit();
+        }
+      };
+
+      const vpsController = new AbortController();
+      this.controllers.add(vpsController);
+      const workerCount = Math.max(1, Math.min(6, Number(config.concurrency) || 3));
+      const workersPromise = Promise.all(Array.from({ length: workerCount }, () => streamWorker()));
+
+      let result;
+      let vpsError = null;
       try {
         const context = this.buildVpsContext(settings, meta, tempContext) || undefined;
         const pageUrl = typeof location !== 'undefined' && location.href
           ? location.href
           : `https://www.youtube.com/watch?v=${videoId}`;
-        const result = await LT.VpsAsr.transcribe({
+        const video = this.getVideo();
+        const preferMs = video && Number.isFinite(video.currentTime) ? Math.max(0, Math.round(video.currentTime * 1000)) : 0;
+
+        result = await LT.VpsAsr.transcribe({
           baseUrl: settings.videoAsrBaseUrl,
           token: settings.videoAsrToken,
           videoId,
@@ -438,26 +635,83 @@ globalThis.LT = globalThis.LT || {};
           model: settings.videoAsrModel,
           context,
           force,
-          signal: controller.signal,
+          preferMs,
+          signal: vpsController.signal,
+          onChunk: chunk => {
+            if (!alive() || this.fatal) return;
+            if (!chunk.units || !chunk.units.length) return;
+            const segUnits = chunk.units.map((u, idx) => ({
+              id: idx + 1,
+              start: u.start,
+              end: u.end,
+              text: u.text,
+            }));
+            const segChunks = LT.Chunker.plan(segUnits, {
+              chunkUnits: LT.SUBS.CHUNK_UNITS,
+              chunkChars: LT.SUBS.CHUNK_CHARS,
+            });
+            streamSegs.set(chunk.index, {
+              index: chunk.index,
+              startMs: chunk.startMs,
+              endMs: chunk.endMs,
+              units: segUnits,
+              texts: new Array(segUnits.length),
+              chunks: segChunks,
+              states: segChunks.map(() => 'pending'),
+            });
+            this.phase = 'transcribing';
+            rebuildTimeline();
+            wakeWorkers();
+            this.emit();
+          },
           onProgress: p => {
-            if (!alive()) return;
+            if (!alive() || this.fatal) return;
             const rawPct = Number(p.progress) || 0;
             const pct = rawPct > 0 && rawPct < 1 ? Math.round(rawPct * 100) : Math.round(rawPct);
             this.progress = Math.max(0, Math.min(100, pct));
             this.stage = p.stage || '';
-            this.phase = p.status === 'queued' || p.status === 'downloading' ? 'downloading' : 'transcribing';
-            this.note(`流译：${this.stage || (this.phase === 'downloading' ? 'VPS 下载音频中…' : `VPS 转写中 ${this.progress}%`)}`, 'warn', false);
+            if (p.totalChunks) this.asrTotal = p.totalChunks;
+            if (p.doneChunks != null) this.asrDone = p.doneChunks;
+            this.phase = streamSegs.size > 0
+              ? 'transcribing'
+              : (p.status === 'queued' || p.status === 'downloading' ? 'downloading' : 'transcribing');
+            if (!this.units || !this.units.length) {
+              this.note(
+                `流译：${this.stage || (this.phase === 'downloading' ? 'VPS 下载音频中…' : `VPS 转写中 ${this.progress}%`)}`,
+                'warn',
+                false
+              );
+            }
             this.emit();
           },
         });
-        if (!alive()) return null;
-        const usedModel = result.model || settings.videoAsrModel || 'default';
-        const modelLabel = (Array.isArray(settings.videoAsrModels)
-          ? settings.videoAsrModels.find(item => item.id === usedModel)?.label
-          : '') || usedModel;
-        const lang = result.lang || settings.sourceLang || 'auto';
-        const trackKey = `vps|${lang}|${usedModel}`;
-        const trackLabel = `VPS 转写 · ${modelLabel}`;
+      } catch (err) {
+        vpsError = err;
+        if (!this.fatal) this.abortAll();
+      } finally {
+        this.controllers.delete(vpsController);
+        vpsDone = true;
+        wakeWorkers();
+      }
+
+      await workersPromise;
+      if (!alive()) return null;
+      if (this.fatal) {
+        await this.finish(alive);
+        return { streamFinished: true };
+      }
+      if (vpsError) throw vpsError;
+
+      const usedModel = result.model || settings.videoAsrModel || 'default';
+      const modelLabel = (Array.isArray(settings.videoAsrModels)
+        ? settings.videoAsrModels.find(item => item.id === usedModel)?.label
+        : '') || usedModel;
+      const lang = result.lang || settings.sourceLang || 'auto';
+      const trackKey = `vps|${lang}|${usedModel}`;
+      const trackLabel = `VPS 转写 · ${modelLabel}`;
+
+      // 服务端缓存直返或旧版 VPS 未返回增量分片：沿用标准整片缓存与翻译路径
+      if (streamSegs.size === 0) {
         const units = result.units;
         await LT.SubsCache.setSource(videoId, trackKey, {
           videoId,
@@ -476,9 +730,93 @@ globalThis.LT = globalThis.LT || {};
         this.stage = 'VPS 转写完成';
         this.emit();
         return { units, trackKey, trackLabel, isAsr: false, sourceKind: 'vps' };
-      } finally {
-        this.controllers.delete(controller);
       }
+
+      // 增量流式翻译已随转写同步完成：规整为标准块结构并写入完整本机缓存
+      rebuildTimeline();
+      const finalUnits = this.units || [];
+      if (!finalUnits.length) throw new Error('VPS 转写结果为空');
+      const finalTexts = this.texts;
+      const finalChunks = LT.Chunker.plan(finalUnits, {
+        chunkUnits: LT.SUBS.CHUNK_UNITS,
+        chunkChars: LT.SUBS.CHUNK_CHARS,
+      });
+      const finalStates = finalChunks.map(c => {
+        for (let k = c.from; k <= c.to; k++) {
+          if (typeof finalTexts[k] !== 'string' || !finalTexts[k].trim()) return 'failed';
+        }
+        return 'done';
+      });
+      const sourceHash = LT.SubsCache.fingerprint(pack(finalUnits));
+      const { fp } = this.buildPromptAndFingerprint(run, { isAsr: false, trackKey, sourceHash });
+
+      Object.assign(this, {
+        units: finalUnits,
+        texts: finalTexts,
+        chunks: finalChunks,
+        states: finalStates,
+        fp,
+        trackKey,
+        trackLabel,
+        isAsr: false,
+        sourceKind: 'vps',
+        config,
+        system,
+        staleConfig: false,
+        fromCache: false,
+        hasCache: true,
+        progress: 100,
+        stage: 'VPS 转写完成',
+        lastIdx: -2,
+      });
+
+      const record = {
+        videoId,
+        title: (meta && meta.title) || (cachedMeta && cachedMeta.title) || '',
+        trackKey,
+        trackLabel,
+        sourceLang: settings.sourceLang,
+        sourceHash,
+        segVersion: LT.SUBS.SEG_VERSION,
+        settingsHash: settingsHash(settings),
+        targetLang: settings.targetLang,
+        fp,
+        apiType: config.apiType,
+        model: config.model,
+        sceneLabel: scene.label,
+        unitCount: finalUnits.length,
+        chunks: finalChunks.map(c => [c.from, c.to]),
+        complete: finalStates.every(s => s === 'done'),
+        createdAt: (cachedMeta && cachedMeta.createdAt) || Date.now(),
+        updatedAt: Date.now(),
+      };
+      this.meta = record;
+      this.cachedComplete = record.complete;
+
+      try {
+        await LT.SubsCache.removeChunks(videoId);
+        await LT.SubsCache.setSource(videoId, trackKey, {
+          videoId,
+          trackKey,
+          lang,
+          isAsr: false,
+          sourceKind: 'vps',
+          model: usedModel,
+          segVersion: LT.SUBS.SEG_VERSION,
+          units: pack(finalUnits),
+        });
+        for (let i = 0; i < finalChunks.length; i++) {
+          if (finalStates[i] !== 'done') continue;
+          await LT.SubsCache.setChunk(videoId, fp, i, finalTexts.slice(finalChunks[i].from, finalChunks[i].to + 1));
+        }
+        await LT.SubsCache.setMeta(record);
+      } catch (err) {
+        if (alive()) this.saveError = err && err.message ? err.message : '缓存写入失败';
+      }
+      if (!alive()) return null;
+
+      await this.finish(alive);
+      return { streamFinished: true };
     }
 
     buildPromptAndFingerprint({ settings, meta, tempContext, config }, { isAsr, trackKey, sourceHash }) {
@@ -769,15 +1107,19 @@ globalThis.LT = globalThis.LT || {};
      * 翻译 units[from..to]，直到全部编号都有译文，或用完尝试次数。
      * 截断：缺的是结尾一段就只补那一段；整段都没有就对半拆。零散缺漏：只补缺的编号。
      */
-    async translateRange(alive, from, to, depth = 0) {
-      const target = this.units.slice(from, to + 1);
+    translateRange(alive, from, to, depth = 0) {
+      return this.translateRangeOn(this.units, this.texts, alive, from, to, depth, () => this.emit());
+    }
+
+    async translateRangeOn(units, texts, alive, from, to, depth = 0, onApplied = () => this.emit()) {
+      const target = units.slice(from, to + 1);
       if (target.length === 0) return;
       let attempt = 0;
       for (;;) {
         if (!alive()) throw abortError();
         await this.waitCooldown(alive);
         if (!alive()) throw abortError();
-        const ctx = LT.Chunker.context(this.units, from, to, LT.SUBS.CONTEXT_UNITS);
+        const ctx = LT.Chunker.context(units, from, to, LT.SUBS.CONTEXT_UNITS);
         let res;
         try {
           res = await this.request(LT.Chunker.formatRequest({ before: ctx.before, target, after: ctx.after }));
@@ -788,17 +1130,17 @@ globalThis.LT = globalThis.LT || {};
         if (!alive()) throw abortError();
         const parsed = LT.Chunker.parseResponse(res.text);
         const check = LT.Chunker.validate(parsed.map, target);
-        this.apply(parsed.map, target);
+        this.applyTo(texts, parsed.map, target, onApplied);
         if (check.ok) return;
 
         if (depth < 8 && LT.Chunker.looksTruncated(res.finishReason, check.missing, target)) {
           if (check.missing.length < target.length) {
-            return this.translateRange(alive, to - check.missing.length + 1, to, depth + 1);
+            return this.translateRangeOn(units, texts, alive, to - check.missing.length + 1, to, depth + 1, onApplied);
           }
           if (target.length >= LT.SUBS.MIN_SPLIT_UNITS * 2) {
             const mid = from + Math.floor(target.length / 2);
-            await this.translateRange(alive, from, mid - 1, depth + 1);
-            return this.translateRange(alive, mid, to, depth + 1);
+            await this.translateRangeOn(units, texts, alive, from, mid - 1, depth + 1, onApplied);
+            return this.translateRangeOn(units, texts, alive, mid, to, depth + 1, onApplied);
           }
         }
 
@@ -813,17 +1155,17 @@ globalThis.LT = globalThis.LT || {};
             );
             if (!alive()) throw abortError();
             const again = LT.Chunker.parseResponse(topup.text);
-            this.apply(again.map, missingUnits);
+            this.applyTo(texts, again.map, missingUnits, onApplied);
             fixed = LT.Chunker.validate(again.map, missingUnits).ok;
           } catch (err) {
             if (isAbort(err) || (err && err.fatal)) throw err;
           }
           if (fixed) return;
           // 只剩极短的语气词或 [音楽] 这类标记还缺：照抄原文，不为它们再发整块
-          const still = missingUnits.filter((u) => this.texts[u.id - 1] == null);
+          const still = missingUnits.filter((u) => texts[u.id - 1] == null);
           if (still.every((u) => u.text.length <= 3 || TINY_RE.test(u.text))) {
-            for (const u of still) this.texts[u.id - 1] = u.text;
-            this.emit();
+            for (const u of still) texts[u.id - 1] = u.text;
+            onApplied();
             return;
           }
         }
@@ -865,15 +1207,19 @@ globalThis.LT = globalThis.LT || {};
     }
 
     apply(map, units) {
+      this.applyTo(this.texts, map, units, () => this.emit());
+    }
+
+    applyTo(texts, map, units, onApplied) {
       let changed = false;
       for (const u of units) {
         const t = map.get(u.id);
         if (t != null && t.trim()) {
-          this.texts[u.id - 1] = t.trim();
+          texts[u.id - 1] = t.trim();
           changed = true;
         }
       }
-      if (changed) this.emit();
+      if (changed) onApplied?.();
     }
 
     async waitCooldown(alive) {
@@ -916,7 +1262,9 @@ globalThis.LT = globalThis.LT || {};
         this.lastIdx = idx;
         this.lastText = text;
       }
-      if (this.phase === 'translating') this.progressNote();
+      if (this.phase === 'translating' || (this.phase === 'transcribing' && this.units && this.units.length)) {
+        this.progressNote();
+      }
     }
   }
 

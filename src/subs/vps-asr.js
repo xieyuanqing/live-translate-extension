@@ -1,6 +1,7 @@
 /**
  * VPS 云端音频转写客户端：与自建 vps-asr-server 通信。
- * 约定接口：GET /health、GET /api/models、POST /api/transcribe、GET /api/jobs/:id、POST /api/jobs/:id/cancel。
+ * 约定接口：GET /health、GET /api/models、POST /api/transcribe、GET /api/jobs/:id?afterSeq=N、POST /api/jobs/:id/cancel。
+ * 支持增量流式回调 onChunk：VPS 每转写完一个音频分片就立即交给扩展端并行翻译并上屏，无需等全片结束。
  */
 globalThis.LT = globalThis.LT || {};
 
@@ -64,6 +65,20 @@ globalThis.LT = globalThis.LT || {};
       last = s;
     }
     return out;
+  }
+
+  function normalizeChunk(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const seq = Number(raw.seq);
+    const index = Number(raw.index);
+    if (!Number.isFinite(index) || index < 0) return null;
+    return {
+      seq: Number.isFinite(seq) ? seq : 0,
+      index: Math.trunc(index),
+      startMs: Math.max(0, Math.round(Number(raw.startMs) || 0)),
+      endMs: Math.max(0, Math.round(Number(raw.endMs) || 0)),
+      units: normalizeUnits(raw.units),
+    };
   }
 
   function parseResponse(res) {
@@ -177,14 +192,24 @@ globalThis.LT = globalThis.LT || {};
     model,
     context,
     force,
+    preferMs,
     signal,
     onProgress,
-    pollIntervalMs = 2000,
+    onChunk,
+    pollIntervalMs = 1000,
     maxWaitMs = 1800000,
   }) {
     const base = normalizeBaseUrl(baseUrl);
     const headers = { ...authHeaders(token), 'Content-Type': 'application/json' };
-    const payload = { videoId, url, sourceLang, model, context, force: !!force };
+    const payload = {
+      videoId,
+      url,
+      sourceLang,
+      model,
+      context,
+      force: !!force,
+      ...(Number.isFinite(preferMs) && preferMs > 0 ? { preferMs: Math.round(preferMs) } : {}),
+    };
 
     const created = await request(base, '/api/transcribe', {
       method: 'POST',
@@ -219,22 +244,41 @@ globalThis.LT = globalThis.LT || {};
       }).catch(() => {});
     };
 
+    const seenIndexes = new Set();
+    let lastSeq = 0;
+    const emitChunks = (rawChunks, meta) => {
+      if (!Array.isArray(rawChunks) || !rawChunks.length) return;
+      for (const item of rawChunks) {
+        const chunk = normalizeChunk(item);
+        if (!chunk) continue;
+        if (chunk.seq > lastSeq) lastSeq = chunk.seq;
+        if (seenIndexes.has(chunk.index)) continue;
+        seenIndexes.add(chunk.index);
+        onChunk?.(chunk, meta);
+      }
+    };
+
     const started = Date.now();
     let disconnects = 0;
+    let firstPoll = true;
     while (Date.now() - started < maxWaitMs) {
       if (signal?.aborted) {
         notifyCancel();
         throw abortError();
       }
-      try {
-        await sleepAbortable(pollIntervalMs, signal);
-      } catch (err) {
-        notifyCancel();
-        throw err;
+      if (!firstPoll) {
+        try {
+          await sleepAbortable(pollIntervalMs, signal);
+        } catch (err) {
+          notifyCancel();
+          throw err;
+        }
       }
+      firstPoll = false;
 
       try {
-        const polled = await request(base, `/api/jobs/${encodeURIComponent(jobId)}`, {
+        const query = lastSeq > 0 ? `?afterSeq=${lastSeq}` : '';
+        const polled = await request(base, `/api/jobs/${encodeURIComponent(jobId)}${query}`, {
           method: 'GET',
           headers,
           signal,
@@ -252,13 +296,22 @@ globalThis.LT = globalThis.LT || {};
         continue;
       }
 
-      onProgress?.({
+      if (Number.isFinite(Number(data.seq)) && Number(data.seq) > lastSeq && (!Array.isArray(data.chunks) || !data.chunks.length)) {
+        lastSeq = Number(data.seq);
+      }
+
+      const progressInfo = {
         status: data.status || '',
         progress: Number(data.progress || 0),
         stage: data.stage || '',
         model: data.model || model || '',
         provider: data.provider || '',
-      });
+        lang: data.lang || sourceLang || '',
+        totalChunks: Number(data.totalChunks || 0),
+        doneChunks: Number(data.doneChunks || 0),
+      };
+      emitChunks(data.chunks, progressInfo);
+      onProgress?.(progressInfo);
 
       if (data.status === 'error') {
         throw new Error(`VPS 转写失败：${data.error || '未知错误'}`);
@@ -268,13 +321,14 @@ globalThis.LT = globalThis.LT || {};
       }
       if (data.status === 'done') {
         const units = normalizeUnits(data.units);
-        if (!units.length) throw new Error('VPS 转写结果为空');
+        if (!units.length && seenIndexes.size === 0) throw new Error('VPS 转写结果为空');
         return {
           units,
           model: data.model || model || '',
           provider: data.provider || '',
           lang: data.lang || sourceLang || '',
           cached: !!data.cached,
+          streamedChunks: seenIndexes.size,
         };
       }
     }

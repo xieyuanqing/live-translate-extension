@@ -6,12 +6,15 @@
   "ytDlpPath": "yt-dlp",
   "ffmpegPath": "ffmpeg",
   "ytDlpExtraArgs": [],
-  "chunkSeconds": 150,
-  "chunkConcurrency": 3,
+  "headChunkSeconds": 60,
+  "chunkSeconds": 180,
+  "cutConcurrency": 2,
+  "chunkConcurrency": 4,
+  "ytDlpFormat": "bestaudio[abr<=96]/worstaudio[abr>=48]/bestaudio/best",
   "maxRetries": 2,
   "defaultModel": "gemini-3.5-transcribe",
   "models": [
-    { "id": "gemini-3.5-transcribe", "label": "Gemini 3.5 Transcribe", "provider": "gemini", "apiModel": "gemini-3.5-transcribe", "baseUrl": "https://generativelanguage.googleapis.com", "apiKey": "", "headers": {}, "enabled": true, "description": "Gemini 原生音频转写", "supportsContext": true, "extra": {} },
+    { "id": "gemini-3.5-transcribe", "label": "Gemini 3.5 Transcribe", "provider": "gemini", "apiModel": "gemini-3.5-transcribe", "baseUrl": "https://generativelanguage.googleapis.com", "apiKey": "", "headers": {}, "enabled": true, "description": "Gemini 原生音频转写", "supportsContext": false, "extra": { "audioTranscriptionConfig": { "wordTimestamp": true } } },
     { "id": "gemini-flash-example", "label": "Gemini Flash（示例）", "provider": "gemini", "apiModel": "gemini-2.5-flash", "baseUrl": "https://your-gemini-proxy.example.com", "apiKey": "", "headers": {}, "enabled": false, "description": "自定义中转站示例", "supportsContext": true, "extra": {} },
     { "id": "whisper-example", "label": "Whisper（示例）", "provider": "openai-audio", "apiModel": "whisper-1", "baseUrl": "https://api.openai.com/v1", "apiKey": "", "headers": {}, "enabled": false, "description": "OpenAI 兼容 /audio/transcriptions", "supportsContext": true, "extra": {} }
   ]
