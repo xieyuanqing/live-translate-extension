@@ -9,7 +9,7 @@ const path = require('path');
 
 const { createServer } = require('./server');
 const { extractVideoId, planSegments } = require('./lib/media');
-const { mergeAndNormalizeUnits } = require('./lib/jobs');
+const { mergeAndNormalizeUnits, JobManager } = require('./lib/jobs');
 const gemini = require('./lib/adapters/gemini');
 const openai = require('./lib/adapters/openai-audio');
 const { registerAdapter } = require('./lib/adapters');
@@ -184,6 +184,44 @@ test('OpenAI 适配器跳过 auto 语言、标准化区域码并兼容仅返回 
   } finally {
     global.fetch = oldFetch;
   }
+});
+
+test('429 时改用 fallback 模型，被限流模型冷却期间后续分片直接走备用', async () => {
+  const calls = [];
+  registerAdapter('fake-limited', {
+    async transcribeChunk({ modelConfig }) {
+      calls.push(modelConfig.id);
+      const err = new Error('rate limited');
+      err.status = 429;
+      throw err;
+    }
+  });
+  registerAdapter('fake-ok', {
+    async transcribeChunk({ offsetMs, modelConfig }) {
+      calls.push(modelConfig.id);
+      return [{ startMs: 0, endMs: 1000, text: `seg@${offsetMs}` }];
+    }
+  });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'asr-test-'));
+  const primary = { id: 'primary', provider: 'fake-limited', enabled: true, fallback: ['backup'] };
+  const backup = { id: 'backup', provider: 'fake-ok', enabled: true };
+  const manager = new JobManager(
+    { cacheDir: dir, chunkConcurrency: 1, maxRetries: 2, models: [primary, backup] },
+    {
+      prepareChunks: async () => ({
+        chunks: [0, 10000, 20000].map(offsetMs => ({
+          audioBuffer: Buffer.from('a'), offsetMs, durationMs: 10000, mimeType: 'audio/mpeg'
+        }))
+      })
+    }
+  );
+  const { job } = await manager.create({ videoId: 'abcdefghijk', sourceLang: 'ja', modelConfig: primary });
+  for (let i = 0; i < 100 && !['done', 'error'].includes(job.status); i++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(job.status, 'done', job.error);
+  assert.deepEqual(job.units.map(u => u.text), ['seg@0', 'seg@10000', 'seg@20000']);
+  assert.deepEqual(calls, ['primary', 'backup', 'backup', 'backup']);
 });
 
 test('mergeAndNormalizeUnits 解决时间重叠并保持 endMs > startMs', () => {

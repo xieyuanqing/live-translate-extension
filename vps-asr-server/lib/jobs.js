@@ -8,6 +8,7 @@ const { getAdapter } = require('./adapters');
 
 const MAX_STORED_JOBS = 200;
 const NON_RETRYABLE_STATUS = new Set([400, 401, 403, 404, 422]);
+const RATE_LIMIT_COOLDOWN_MS = 90000;
 
 function safeKeyPart(value) {
   return String(value).replace(/[^A-Za-z0-9_.-]/g, '_');
@@ -174,10 +175,61 @@ class JobManager {
     return { cached: false, job };
   }
 
+  // 候选模型：所选模型在前，其 fallback 依次在后（去重）
+  candidates(modelConfig) {
+    const all = this.config.models || [];
+    const out = [modelConfig];
+    for (const id of modelConfig.fallback || []) {
+      const model = all.find(item => item && item.id === id && item.enabled !== false);
+      if (model && !out.includes(model)) out.push(model);
+    }
+    return out;
+  }
+
+  // 429 立即换下一个候选并让该模型冷却；5xx/网络错误按 5s、10s 退避重试后再换
+  async transcribeWithFallback(chunk, args, signal, cooldown) {
+    const maxRetries = Math.max(0, Number(this.config.maxRetries ?? 2));
+    const models = this.candidates(args.modelConfig);
+    let lastError = null;
+    for (const [index, modelConfig] of models.entries()) {
+      const isLastModel = index === models.length - 1;
+      if (!isLastModel && (cooldown.get(modelConfig.id) || 0) > Date.now()) continue;
+      const adapter = getAdapter(modelConfig.provider);
+      if (!adapter) {
+        lastError = new Error(`未注册转写适配器：${modelConfig.provider}`);
+        continue;
+      }
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (signal.aborted) throw new Error('任务已取消');
+        try {
+          return await adapter.transcribeChunk({
+            ...chunk,
+            sourceLang: args.sourceLang,
+            context: args.context,
+            modelConfig,
+            signal
+          });
+        } catch (err) {
+          lastError = err;
+          if (signal.aborted) throw err;
+          if (NON_RETRYABLE_STATUS.has(err.status)) break;
+          if (err.status === 429) {
+            cooldown.set(modelConfig.id, Date.now() + RATE_LIMIT_COOLDOWN_MS);
+            if (!isLastModel) break;
+          }
+          if (attempt >= maxRetries) break;
+          const backoff = err.status === 429 || err.status >= 500 ? 5000 * (attempt + 1) : 1000 * (attempt + 1);
+          await sleep(backoff, signal);
+        }
+      }
+    }
+    throw lastError || new Error('没有可用的转写模型');
+  }
+
   async run(job, args) {
     const controller = job.controller;
     const signal = controller.signal;
-    const maxRetries = Math.max(0, Number(this.config.maxRetries ?? 2));
+    const cooldown = new Map();
     const concurrency = Math.max(1, Number(this.config.chunkConcurrency) || 4);
     const cutConcurrency = Math.max(1, Number(this.config.cutConcurrency) || 2);
     const withCutLimit = createSemaphore(cutConcurrency);
@@ -235,8 +287,7 @@ class JobManager {
 
       if (signal.aborted) throw new Error('任务已取消');
 
-      const adapter = getAdapter(args.modelConfig.provider);
-      if (!adapter) {
+      if (!getAdapter(args.modelConfig.provider)) {
         throw new Error(`未注册转写适配器：${args.modelConfig.provider}`);
       }
 
@@ -286,37 +337,18 @@ class JobManager {
           const segOffset = actual.offsetMs ?? seg.startMs ?? 0;
           const segDuration = actual.durationMs ?? seg.durationMs ?? 0;
           let chunkRows = [];
-          let lastError = null;
-
           if (actual.audioBuffer && actual.audioBuffer.length > 0) {
-            for (let attempt = 0; attempt <= maxRetries; attempt++) {
-              if (signal.aborted) throw new Error('任务已取消');
-              try {
-                const rows = await adapter.transcribeChunk({
-                  ...actual,
-                  offsetMs: segOffset,
-                  durationMs: segDuration,
-                  sourceLang: args.sourceLang,
-                  context: args.context,
-                  modelConfig: args.modelConfig,
-                  signal
-                });
-                chunkRows = (rows || []).map(row => ({
-                  startMs: segOffset + row.startMs,
-                  endMs: segOffset + row.endMs,
-                  text: row.text
-                }));
-                lastError = null;
-                break;
-              } catch (err) {
-                lastError = err;
-                if (signal.aborted || NON_RETRYABLE_STATUS.has(err.status) || attempt >= maxRetries) {
-                  break;
-                }
-                await sleep(300 * (2 ** attempt), signal);
-              }
-            }
-            if (lastError) throw lastError;
+            const rows = await this.transcribeWithFallback(
+              { ...actual, offsetMs: segOffset, durationMs: segDuration },
+              args,
+              signal,
+              cooldown
+            );
+            chunkRows = (rows || []).map(row => ({
+              startMs: segOffset + row.startMs,
+              endMs: segOffset + row.endMs,
+              text: row.text
+            }));
           }
 
           const readyUnits = mergeAndNormalizeUnits(chunkRows);
