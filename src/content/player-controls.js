@@ -304,12 +304,15 @@ globalThis.LT = globalThis.LT || {};
         primaryLabel = working ? '取消翻译'
           : video.phase === 'ready' ? '重新翻译'
             : video.phase === 'partial' ? '继续翻译' : '翻译字幕';
+        const pct = Number.isFinite(Number(video.overallProgress))
+          ? Math.max(0, Math.min(100, Math.round(Number(video.overallProgress))))
+          : (video.total ? Math.round(((video.done || 0) / video.total) * 100) : (Number(video.progress) || 0));
         statusDesc = working
           ? (video.phase === 'downloading' || video.phase === 'transcribing'
               ? (video.frontierIdx >= 0
-                  ? `边转边译 · ${video.stage || `${video.progress || 0}%`}`
-                  : (video.stage || (video.phase === 'downloading' ? 'VPS 下载音频中…' : `VPS 转写中${video.progress ? ` ${video.progress}%` : '…'}`)))
-              : (video.total ? `翻译中 · ${video.done || 0}/${video.total} 块` : '正在读取并分句…'))
+                  ? `${pct}% · ${video.asrTotal ? `转写 ${video.asrDone || 0}/${video.asrTotal} 段` : (video.stage || '边转边译')}${video.total ? ` · 翻译 ${video.done || 0}/${video.total} 块` : ''}`
+                  : `${pct > 0 ? `${pct}% · ` : ''}${video.stage || (video.phase === 'downloading' ? 'VPS 下载音频中…' : 'VPS 转写中…')}`)
+              : (video.total ? `${pct}% · 翻译 ${video.done || 0}/${video.total} 块` : '正在读取并分句…'))
           : video.phase === 'ready' ? '整片字幕已就绪'
             : video.phase === 'partial' ? `已完成 ${video.done || 0}/${video.total || 0} 块`
               : video.phase === 'error' ? (video.error || '翻译失败')

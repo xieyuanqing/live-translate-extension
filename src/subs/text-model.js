@@ -10,12 +10,13 @@ globalThis.LT = globalThis.LT || {};
   const PROBE_TIMEOUT_MS = 15000;
 
   class RequestError extends Error {
-    constructor(message, { status = 0, retryAfterMs = 0, fatal = false } = {}) {
+    constructor(message, { status = 0, retryAfterMs = 0, fatal = false, retryable = false } = {}) {
       super(message);
       this.name = 'RequestError';
       this.status = status;
       this.retryAfterMs = retryAfterMs;
       this.fatal = fatal;
+      this.retryable = retryable;
     }
   }
 
@@ -85,13 +86,13 @@ globalThis.LT = globalThis.LT || {};
       };
     }
     if (config.apiType === 'anthropic') {
-      // 较新的 Claude 模型拒绝非默认采样参数，这里不传 temperature。
+      // 较新的 Claude 模型拒绝非默认采样参数，这里不传 temperature；max_tokens 为 Anthropic 协议必填。
       return {
         url: `${config.baseUrl}/v1/messages`,
         headers: requestHeaders(config, true),
         body: JSON.stringify({
           model: config.model,
-          max_tokens: 8192,
+          max_tokens: 32768,
           system,
           messages: [{ role: 'user', content: user }],
           stream: true,
@@ -104,7 +105,7 @@ globalThis.LT = globalThis.LT || {};
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
+        generationConfig: { temperature: 0.4 },
       }),
     };
   }
@@ -193,9 +194,9 @@ globalThis.LT = globalThis.LT || {};
       throw new RequestError(errorMessage(res.status, res.text), { status: res.status, retryAfterMs, fatal });
     }
     const out = collect(config.apiType, LT.Net.parseSse(res.text));
-    // Claude 可能在 HTTP 200 后的流里报错（如过载），此时文本不完整，按可重试处理。
-    if (out.error) throw new RequestError(`流式响应中断：${out.error}`, { status: res.status });
-    if (!out.text.trim()) throw new RequestError('模型没有返回内容', { status: res.status });
+    // Claude 可能在 HTTP 200 后的流里报错（如过载），或网关返回空响应，均按可重试处理。
+    if (out.error) throw new RequestError(`流式响应中断：${out.error}`, { status: res.status, retryable: true });
+    if (!out.text.trim()) throw new RequestError('模型没有返回内容', { status: res.status, retryable: true });
     return { text: out.text, finishReason: out.finishReason, via: res.via };
   }
 

@@ -161,9 +161,11 @@
     renderAsrModelSelect(picker);
 
     const working = ['downloading', 'transcribing', 'reading', 'translating'].includes(v.phase);
-    const pct = v.phase === 'transcribing' || v.phase === 'downloading'
-      ? (Number(v.progress) || 0)
-      : (v.total ? Math.round((v.done / v.total) * 100) : (Number(v.progress) || 0));
+    const pct = Number.isFinite(Number(v.overallProgress))
+      ? Math.max(0, Math.min(100, Math.round(Number(v.overallProgress))))
+      : (v.phase === 'transcribing' || v.phase === 'downloading'
+          ? (Number(v.progress) || 0)
+          : (v.total ? Math.round((v.done / v.total) * 100) : (Number(v.progress) || 0)));
     const target = LT.targetLabel(v.targetLang || settings.targetLang);
     const stale = v.staleConfig || (v.targetLang && v.targetLang !== settings.targetLang);
     let state = '';
@@ -171,23 +173,32 @@
     let startLabel = '开始视频翻译';
     switch (v.phase) {
       case 'downloading':
-        state = v.stage || 'VPS 下载音频中…';
+        state = pct > 0 ? `${pct}% · ${v.stage || '正在下载音频…'}` : (v.stage || 'VPS 下载音频中…');
         hint = '正在由云端 VPS 拉取音频并准备首段切片';
         break;
-      case 'transcribing':
+      case 'transcribing': {
+        const asrPart = v.asrTotal
+          ? `转写 ${v.asrDone || 0}/${v.asrTotal} 段${v.usingFallback ? '（备用）' : ''}`
+          : (v.stage || 'VPS 转写中…');
+        const transPart = v.total ? ` · 翻译 ${v.done || 0}/${v.total} 块` : '';
         state = v.frontierIdx >= 0
-          ? `边转边译 · ${v.stage || `${pct}%`} · 可看到 ${fmtClock(v.frontierMs)}`
-          : (v.stage || `VPS 转写中${pct ? ` ${pct}%` : '…'}`);
-        hint = v.frontierIdx >= 0
-          ? '已并行边转边译：当前可正常观看双语字幕，后续段后台继续补全'
-          : '云端按段异步转写，首段完成后将立刻翻译上屏';
+          ? `${pct}% · ${asrPart}${transPart} · 可看到 ${fmtClock(v.frontierMs)}`
+          : `${pct}% · ${asrPart}${transPart}`;
+        hint = v.translateRetryHint
+          ? `文字翻译${v.translateRetryHint}，已译部分可正常观看`
+          : (v.frontierIdx >= 0
+              ? '已并行边转边译：当前可正常观看双语字幕，后续段后台继续补全'
+              : '云端按段异步转写，首段完成后将立刻翻译上屏');
         break;
+      }
       case 'reading':
         state = '读取原文中…';
         break;
       case 'translating':
-        state = `翻译中 ${pct}%` + (v.frontierIdx >= 0 ? ` · 可看到 ${fmtClock(v.frontierMs)}` : ' · 正在翻译当前位置');
-        hint = '步骤 2：边看边译，拖动进度条会优先翻译当前位置';
+        state = `${pct}% · 翻译 ${v.done || 0}/${v.total || 0} 块` + (v.frontierIdx >= 0 ? ` · 可看到 ${fmtClock(v.frontierMs)}` : ' · 正在翻译当前位置');
+        hint = v.translateRetryHint
+          ? `文字翻译${v.translateRetryHint}，正在自动重试`
+          : '步骤 2：边看边译，拖动进度条会优先翻译当前位置';
         break;
       case 'ready':
         state = `${v.fromCache ? '已就绪（缓存）' : '已就绪'} · ${v.trackLabel || '原文'} → ${target}`;

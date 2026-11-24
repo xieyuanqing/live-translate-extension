@@ -260,3 +260,82 @@ test('VPS 增量分片轮询：传 preferMs、按 afterSeq 增量回调 onChunk 
   assert.equal(receivedChunks[1].index, 1);
   assert.equal(out.streamedChunks, 2);
 });
+
+test('VPS 轮询期间拖动进度条自动携带 preferMs 提权，并透传时长与备用模型进度字段', async () => {
+  const seenUrls = [];
+  const progressEvents = [];
+  let curPos = 10000;
+  let poll = 0;
+  const v = harness(async ({ url }) => {
+    seenUrls.push(url);
+    if (url.endsWith('/api/transcribe')) {
+      return { ok: true, status: 202, text: JSON.stringify({ jobId: 'job-seek', status: 'queued' }) };
+    }
+    poll++;
+    if (poll === 1) {
+      curPos = 15000; // 仅前进 5 秒（< 15s），下次不应上报 preferMs
+      return {
+        ok: true,
+        status: 200,
+        text: JSON.stringify({
+          status: 'downloading',
+          progress: 0,
+          downloadProgress: 40,
+          stage: '正在下载音频 40%',
+        }),
+      };
+    }
+    if (poll === 2) {
+      curPos = 600000; // 拖到 10 分钟处，下次必须携带 preferMs=600000
+      return {
+        ok: true,
+        status: 200,
+        text: JSON.stringify({
+          status: 'transcribing',
+          progress: 25,
+          downloadProgress: 100,
+          durationMs: 1200000,
+          doneDurationMs: 300000,
+          usingFallback: true,
+          stage: '正在转写 1/2 段（备用模型）',
+          totalChunks: 2,
+          doneChunks: 1,
+          seq: 1,
+          chunks: [{ seq: 1, index: 0, startMs: 0, endMs: 300000, units: [{ startMs: 0, endMs: 1000, text: 'a' }] }],
+        }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: JSON.stringify({
+        status: 'done',
+        progress: 100,
+        durationMs: 1200000,
+        doneDurationMs: 1200000,
+        totalChunks: 2,
+        doneChunks: 2,
+        seq: 1,
+        units: [{ startMs: 0, endMs: 1000, text: 'a' }],
+      }),
+    };
+  });
+
+  await v.transcribe({
+    baseUrl: 'https://seek.test',
+    videoId: 'vid12345678',
+    url: 'https://www.youtube.com/watch?v=vid12345678',
+    preferMs: 10000,
+    getPreferMs: () => curPos,
+    pollIntervalMs: 1,
+    onProgress: p => progressEvents.push(p),
+  });
+
+  assert.equal(seenUrls[1], 'https://seek.test/api/jobs/job-seek');
+  assert.equal(seenUrls[2], 'https://seek.test/api/jobs/job-seek');
+  assert.equal(seenUrls[3], 'https://seek.test/api/jobs/job-seek?afterSeq=1&preferMs=600000');
+  assert.equal(progressEvents[0].downloadProgress, 40);
+  assert.equal(progressEvents[1].durationMs, 1200000);
+  assert.equal(progressEvents[1].doneDurationMs, 300000);
+  assert.equal(progressEvents[1].usingFallback, true);
+});

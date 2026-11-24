@@ -3,7 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { extractVideoId } = require('./lib/media');
+const { extractVideoId, normalizeScheduleSeconds } = require('./lib/media');
 const { JobManager } = require('./lib/jobs');
 const { registerAdapter } = require('./lib/adapters');
 
@@ -149,8 +149,13 @@ function viewJob(job, afterSeq = 0) {
     jobId: job.jobId,
     status: job.status,
     progress: job.progress,
+    downloadProgress: job.downloadProgress || 0,
+    durationMs: job.durationMs || 0,
+    doneDurationMs: job.doneDurationMs || 0,
     stage: job.stage,
     model: job.model,
+    activeModel: job.activeModel || job.model,
+    usingFallback: Boolean(job.usingFallback),
     provider: job.provider,
     lang: job.lang,
     totalChunks: job.totalChunks || 0,
@@ -226,6 +231,13 @@ function createServer(options = {}) {
         }
         const query = new URL(req.url, 'http://localhost').searchParams;
         const afterSeq = Math.max(0, Number(query.get('afterSeq')) || 0);
+        const rawPrefer = query.get('preferMs');
+        if (rawPrefer !== null && typeof job.reprioritize === 'function') {
+          const preferMs = Math.max(0, Math.round(Number(rawPrefer)));
+          if (Number.isFinite(preferMs) && Math.abs(preferMs - (job.lastPreferMs || 0)) >= 15000) {
+            job.reprioritize(preferMs);
+          }
+        }
         send(200, viewJob(job, afterSeq));
         return;
       }
@@ -294,11 +306,17 @@ function createServer(options = {}) {
 }
 
 if (require.main === module) {
-  const { server, config } = createServer();
+  const { server, config, manager } = createServer();
   const port = Number(config.port) || 8787;
   const host = config.host || '0.0.0.0';
   server.listen(port, host, () => {
-    console.log(`liuyi-vps-asr 监听 http://${host}:${port}`);
+    const models = publicModels(config);
+    manager.log('server.start', {
+      listen: `http://${host}:${port}`,
+      models: models.length,
+      defaultModel: resolveDefaultModel(config, models),
+      schedule: normalizeScheduleSeconds(config)
+    });
   });
 }
 

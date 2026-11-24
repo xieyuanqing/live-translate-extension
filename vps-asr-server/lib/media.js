@@ -15,7 +15,9 @@ const ALLOWED_HOSTS = new Set([
   'www.youtube-nocookie.com'
 ]);
 const DEFAULT_YT_DLP_FORMAT = 'bestaudio[abr<=96]/worstaudio[abr>=48]/bestaudio/best';
+const DEFAULT_CHUNK_SCHEDULE_SECONDS = [60, 180, 300, 1200];
 const MIN_TAIL_MS = 15000;
+const DOWNLOAD_PCT_RE = /\[download\]\s+(\d+(?:\.\d+)?)%/;
 
 function extractVideoId(input) {
   const raw = String(input || '').trim();
@@ -50,14 +52,19 @@ function extractVideoId(input) {
 
 function run(bin, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+    const { onStdout, onStderr, ...spawnOptions } = options;
+    const child = spawn(bin, args, { ...spawnOptions, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', chunk => {
-      stdout += chunk;
+      const text = chunk.toString();
+      stdout += text;
+      if (onStdout) onStdout(text);
     });
     child.stderr.on('data', chunk => {
-      stderr += chunk;
+      const text = chunk.toString();
+      stderr += text;
+      if (onStderr) onStderr(text);
     });
 
     const onAbort = () => {
@@ -121,6 +128,34 @@ async function probeDurationMs(config, inputPath, signal) {
   }
 }
 
+function parseDownloadPercent(text) {
+  let latest = null;
+  for (const part of String(text || '').split(/[\r\n]+/)) {
+    const match = DOWNLOAD_PCT_RE.exec(part);
+    if (match) {
+      const value = Number(match[1]);
+      if (Number.isFinite(value)) latest = Math.max(0, Math.min(100, Math.round(value)));
+    }
+  }
+  return latest;
+}
+
+function normalizeScheduleSeconds({ chunkScheduleSeconds, headChunkSeconds, chunkSeconds } = {}) {
+  if (Array.isArray(chunkScheduleSeconds) && chunkScheduleSeconds.length > 0) {
+    const parsed = chunkScheduleSeconds
+      .map(v => Math.round(Number(v)))
+      .filter(v => Number.isFinite(v) && v > 0)
+      .map(v => Math.max(15, v));
+    if (parsed.length > 0) return parsed;
+  }
+  if (headChunkSeconds !== undefined || chunkSeconds !== undefined) {
+    const head = Math.max(15, Math.round(Number(headChunkSeconds) || 60));
+    const regular = Math.max(30, Math.round(Number(chunkSeconds) || 180));
+    return [head, regular];
+  }
+  return DEFAULT_CHUNK_SCHEDULE_SECONDS.slice();
+}
+
 function splitForward(startMs, endMs, stepMs) {
   const list = [];
   for (let s = startMs; s < endMs; s += stepMs) {
@@ -135,47 +170,65 @@ function splitForward(startMs, endMs, stepMs) {
   return list;
 }
 
-/**
- * 规划音频分片：首段短切（默认 60 秒）放在 preferMs 处最先执行，
- * 随后向片尾推进，最后回头补 0..preferMs；各段同时保有稳定的时间序 index。
- */
-function planSegments(durationMs, { headChunkSeconds = 60, chunkSeconds = 180, preferMs = 0 } = {}) {
-  const totalMs = Math.round(Number(durationMs) || 0);
-  if (totalMs <= 0) return { segments: [], priorityOrder: [] };
+function splitProgressive(startMs, endMs, scheduleMs) {
+  const list = [];
+  let s = startMs;
+  let stepIdx = 0;
+  while (s < endMs) {
+    const stepMs = scheduleMs[Math.min(stepIdx, scheduleMs.length - 1)];
+    let e = Math.min(endMs, s + stepMs);
+    if (endMs - e > 0 && endMs - e < MIN_TAIL_MS) {
+      e = endMs;
+    }
+    if (list.length && e - s < MIN_TAIL_MS) {
+      list[list.length - 1].endMs = e;
+      list[list.length - 1].durationMs = e - list[list.length - 1].startMs;
+    } else if (e > s) {
+      list.push({ startMs: s, endMs: e, durationMs: e - s });
+    }
+    s = e;
+    stepIdx += 1;
+  }
+  return list;
+}
 
-  const headMs = Math.max(15, Number(headChunkSeconds) || 60) * 1000;
-  const stepMs = Math.max(30, Number(chunkSeconds) || 180) * 1000;
-  if (totalMs <= headMs * 1.5) {
+/**
+ * 规划音频分片：从 preferMs 起按渐进时长计划（默认 1分 → 3分 → 5分 → 20分）向片尾推进，
+ * 播放位置之前按稳态长段切分并在最后回头补全；各段保有稳定的时间序 index。
+ */
+function planSegments(durationMs, options = {}) {
+  const { preferMs = 0 } = options;
+  const totalMs = Math.round(Number(durationMs) || 0);
+  const scheduleSeconds = normalizeScheduleSeconds(options);
+  if (totalMs <= 0) return { segments: [], priorityOrder: [], scheduleSeconds };
+
+  const scheduleMs = scheduleSeconds.map(s => s * 1000);
+  const firstMs = scheduleMs[0];
+  const steadyMs = scheduleMs[scheduleMs.length - 1];
+  if (totalMs <= firstMs * 1.5) {
     return {
       segments: [{ index: 0, startMs: 0, endMs: totalMs, durationMs: totalMs }],
-      priorityOrder: [0]
+      priorityOrder: [0],
+      scheduleSeconds
     };
   }
 
   const anchor = Math.min(Math.max(0, Math.round(Number(preferMs) || 0)), Math.max(0, totalMs - 1000));
-  let headStart = anchor;
-  if (headStart > 0 && headStart < MIN_TAIL_MS) {
-    headStart = 0;
-  }
-  let headEnd = Math.min(totalMs, headStart + headMs);
-  if (totalMs - headEnd > 0 && totalMs - headEnd < MIN_TAIL_MS) {
-    headEnd = totalMs;
-  }
+  const headStart = anchor > 0 && anchor < MIN_TAIL_MS ? 0 : anchor;
 
-  const before = headStart > 0 ? splitForward(0, headStart, stepMs) : [];
-  const head = { startMs: headStart, endMs: headEnd, durationMs: headEnd - headStart };
-  const after = headEnd < totalMs ? splitForward(headEnd, totalMs, stepMs) : [];
+  const before = headStart > 0 ? splitForward(0, headStart, steadyMs) : [];
+  const after = splitProgressive(headStart, totalMs, scheduleMs);
 
-  const segments = [...before, head, ...after].map((seg, index) => ({ ...seg, index }));
+  const segments = [...before, ...after].map((seg, index) => ({ ...seg, index }));
   const headIndex = before.length;
-  const priorityOrder = [headIndex];
-  for (let i = headIndex + 1; i < segments.length; i++) priorityOrder.push(i);
+  const priorityOrder = [];
+  for (let i = headIndex; i < segments.length; i++) priorityOrder.push(i);
   for (let i = 0; i < headIndex; i++) priorityOrder.push(i);
 
-  return { segments, priorityOrder };
+  return { segments, priorityOrder, scheduleSeconds };
 }
 
-async function downloadAudio({ videoId, url, config, signal, onStage }) {
+async function downloadAudio({ videoId, url, config, signal, onStage, onDownloadProgress }) {
   const id = extractVideoId(videoId || url);
   const canonicalUrl = `https://www.youtube.com/watch?v=${id}`;
   const tempRoot = config.tempDir || os.tmpdir();
@@ -186,18 +239,38 @@ async function downloadAudio({ videoId, url, config, signal, onStage }) {
 
   try {
     onStage?.('正在下载音频');
+    let lastPct = -1;
+    let lineBuf = '';
+    const handleChunk = text => {
+      lineBuf += text;
+      const lines = lineBuf.split(/[\r\n]+/);
+      lineBuf = lines.pop() || '';
+      for (const line of lines) {
+        const pct = parseDownloadPercent(line);
+        if (pct !== null && pct !== lastPct) {
+          lastPct = pct;
+          onDownloadProgress?.(pct);
+        }
+      }
+    };
+
     await run(
       config.ytDlpPath || 'yt-dlp',
       [
         '--no-playlist',
+        '--newline',
         '-f', config.ytDlpFormat || DEFAULT_YT_DLP_FORMAT,
         '-o', sourceTemplate,
         ...(config.ytDlpExtraArgs || []),
         '--',
         canonicalUrl
       ],
-      { signal }
+      { signal, onStdout: handleChunk, onStderr: handleChunk }
     );
+    if (lineBuf) {
+      const pct = parseDownloadPercent(lineBuf);
+      if (pct !== null && pct !== lastPct) onDownloadProgress?.(pct);
+    }
 
     const file = (await fsp.readdir(tempDir)).find(name => name.startsWith('source.'));
     if (!file) throw new Error('yt-dlp 未生成音频文件');
@@ -237,7 +310,8 @@ async function cutSegment({ inputPath, tempDir, index, startMs, durationMs, conf
 
 /** 极少数无法探测总时长时的兜底连续分段。 */
 async function cutAllFallback({ inputPath, tempDir, config, signal }) {
-  const chunkMs = Math.max(30, Number(config.chunkSeconds) || 180) * 1000;
+  const schedule = normalizeScheduleSeconds(config);
+  const chunkMs = Math.max(30, schedule[schedule.length - 1]) * 1000;
   const segmentSec = Math.round(chunkMs / 1000);
   const pattern = path.join(tempDir, 'chunk-%04d.mp3');
   await run(
@@ -302,8 +376,11 @@ async function prepareChunks(args) {
 }
 
 module.exports = {
+  DEFAULT_CHUNK_SCHEDULE_SECONDS,
   extractVideoId,
   run,
+  parseDownloadPercent,
+  normalizeScheduleSeconds,
   probeDurationMs,
   planSegments,
   downloadAudio,

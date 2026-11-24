@@ -419,6 +419,22 @@ console.log('\n[7] 分块、排队与输出校验');
   const byChars = LT.Chunker.plan(units.slice(0, 50), { chunkUnits: 60, chunkChars: 400 });
   check('按字符上限分块', byChars.length === 3 && byChars[0].to === 19, JSON.stringify(byChars));
 
+  // 渐进时间分块：1分 → 3分 → 5分 → 20分（每条 3s，1000 条 = 3000s = 50 分钟）
+  const longUnits = [];
+  for (let i = 0; i < 1000; i++) longUnits.push({ id: i + 1, start: i * 3000, end: i * 3000 + 2500, text: '测试台词' });
+  const sched = LT.Chunker.plan(longUnits, { chunkUnits: 1000, chunkChars: 30000, scheduleMs: [60000, 180000, 300000, 1200000] });
+  check(
+    '渐进时长分块（1分→3分→5分→20分）',
+    sched.length === 6 &&
+      sched[0].from === 0 && sched[0].to === 19 &&
+      sched[1].from === 20 && sched[1].to === 79 &&
+      sched[2].from === 80 && sched[2].to === 179 &&
+      sched[3].from === 180 && sched[3].to === 579 &&
+      sched[4].from === 580 && sched[4].to === 979 &&
+      sched[5].from === 980 && sched[5].to === 999,
+    JSON.stringify(sched)
+  );
+
   const states = chunks.map(() => 'pending');
   check('含当前位置的块最先', LT.Chunker.pick(chunks, states, units, 200000) === 1);
   states[1] = 'done';
@@ -567,7 +583,12 @@ console.log('\n[10] 文字模型请求与流式解析');
   const req = LT.TextModel.buildRequest(cfg, 'sys', 'user');
   check('Gemini 请求地址与头', req.url.includes('/v1beta/models/m:streamGenerateContent?alt=sse') && req.headers['x-goog-api-key'] === 'k');
   const body = JSON.parse(req.body);
-  check('Gemini systemInstruction', body.systemInstruction.parts[0].text === 'sys' && body.contents[0].parts[0].text === 'user');
+  check(
+    'Gemini systemInstruction 且不硬设 maxOutputTokens',
+    body.systemInstruction.parts[0].text === 'sys' &&
+      body.contents[0].parts[0].text === 'user' &&
+      body.generationConfig.maxOutputTokens === undefined
+  );
   const oreq = LT.TextModel.buildRequest({ ...cfg, apiType: 'openai', baseUrl: 'https://api.openai.com/v1' }, 'sys', 'user');
   const obody = JSON.parse(oreq.body);
   check(

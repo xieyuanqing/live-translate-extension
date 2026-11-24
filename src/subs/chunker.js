@@ -9,22 +9,57 @@ globalThis.LT = globalThis.LT || {};
 (() => {
   const LT = globalThis.LT;
 
-  /** 按条数与字符数双上限切块，先到先切。返回 [{i, from, to}]，from/to 为 units 下标（含）。 */
-  function plan(units, { chunkUnits, chunkChars }) {
+  const MIN_TAIL_MS = 15000;
+
+  /**
+   * 分块规划：支持按渐进时长表 scheduleMs（例如 1分 → 3分 → 5分 → 20分）结合条数/字符上限切分；
+   * 未传 scheduleMs 时仅按条数与字符数双上限切分。返回 [{i, from, to}]，from/to 为 units 下标（含）。
+   */
+  function plan(units, { chunkUnits, chunkChars, scheduleMs }) {
     const chunks = [];
+    const hasSchedule = Array.isArray(scheduleMs) && scheduleMs.length > 0;
+    if (hasSchedule && units.length > 0) {
+      const totalSpan = Math.max(0, units[units.length - 1].end - units[0].start);
+      let totalChars = 0;
+      for (const u of units) totalChars += u.text.length;
+      // 短视频（总时长 ≤ 首段 1.5 倍且不超条数/字符上限）直接整片 1 块，与后端 planSegments 对齐
+      if (totalSpan <= scheduleMs[0] * 1.5 && units.length <= chunkUnits && totalChars <= chunkChars) {
+        return [{ i: 0, from: 0, to: units.length - 1 }];
+      }
+    }
     let from = 0;
     let chars = 0;
+    let blockStartMs = units.length > 0 ? units[0].start : 0;
     for (let i = 0; i < units.length; i++) {
       const len = units[i].text.length;
       const count = i - from + 1;
-      if (count > 1 && (count > chunkUnits || chars + len > chunkChars)) {
+      const targetMs = hasSchedule ? scheduleMs[Math.min(chunks.length, scheduleMs.length - 1)] : 0;
+      const byTime = hasSchedule && targetMs > 0 && units[i].start - blockStartMs >= targetMs;
+      if (count > 1 && (byTime || count > chunkUnits || chars + len > chunkChars)) {
         chunks.push({ i: chunks.length, from, to: i - 1 });
         from = i;
         chars = 0;
+        blockStartMs = units[i].start;
       }
       chars += len;
     }
     if (units.length > 0) chunks.push({ i: chunks.length, from, to: units.length - 1 });
+
+    // 启用时长分块时，如果最后一块仅剩极短残片且合并后不超条数/字符上限，并入前一块减少一次请求
+    if (hasSchedule && chunks.length >= 2) {
+      const last = chunks[chunks.length - 1];
+      const prev = chunks[chunks.length - 2];
+      const tailSpan = Math.max(0, units[last.to].end - units[last.from].start);
+      if (tailSpan < MIN_TAIL_MS) {
+        const mergedCount = last.to - prev.from + 1;
+        let mergedChars = 0;
+        for (let k = prev.from; k <= last.to; k++) mergedChars += units[k].text.length;
+        if (mergedCount <= chunkUnits && mergedChars <= chunkChars) {
+          prev.to = last.to;
+          chunks.pop();
+        }
+      }
+    }
     return chunks;
   }
 

@@ -256,14 +256,16 @@ globalThis.LT = globalThis.LT || {};
   ];
   LT.SUBS = {
     SEG_VERSION: 1, // 分句规则版本，进缓存指纹；改 segmenter 规则要升号
-    CHUNK_UNITS: 60, // 每块最多条数
-    CHUNK_CHARS: 2500, // 每块最多原文字符
+    CHUNK_SCHEDULE_SEC: [60, 180, 300, 1200], // 渐进分块时长（秒）：1分 → 3分 → 5分 → 后续每块 20 分钟，与 VPS 切段同频
+    CHUNK_UNITS: 1000, // 单块条数安全上限（20 分钟常规 500~700 条，仅防极端超密文本）
+    CHUNK_CHARS: 30000, // 单块原文字符安全上限
     CONTEXT_UNITS: 15, // 每块附带的前后参考条数
-    HEAD_UNITS: 20, // 含当前位置的块先翻这么多条，眼前的字幕先出来
+    HEAD_UNITS: 40, // 直接跳到大块中间时先翻眼前条数，让当前位置先出字幕；首段短块不拆
     MIN_SPLIT_UNITS: 8, // 输出截断时拆块的最小粒度
-    MAX_ATTEMPTS: 3, // 单个区间的最多尝试次数（限流等待不计）
-    BACKOFF_MS: 4000, // 重试退避基数
-    REQUEST_TIMEOUT_MS: 120000, // 整个文字模型请求的等待上限，包含流式正文
+    MAX_RETRIES: 3, // 单次请求报错后的最多重试次数（429 限流额外宽限）
+    MAX_ATTEMPTS: 4, // 单个区间的最多尝试次数（首次 + 最多 3 次重试）
+    BACKOFF_MS: 3000, // 重试退避基数
+    REQUEST_TIMEOUT_MS: 300000, // 整个文字模型请求的等待上限（5 分钟，容纳 20 分钟大块完整流式输出）
   };
   LT.RELAY_PORT = 'lt-relay'; // 内容脚本 ↔ Service Worker 的请求转发端口
 

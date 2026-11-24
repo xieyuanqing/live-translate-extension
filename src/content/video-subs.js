@@ -33,6 +33,25 @@ globalThis.LT = globalThis.LT || {};
       (!i || r[0] >= rows[i - 1][0]));
   const validTexts = (arr, count) => Array.isArray(arr) && arr.length === count &&
     Array.from(arr).every(t => typeof t === 'string' && !!t.trim());
+  const planFullChunks = (units) => LT.Chunker.plan(units, {
+    chunkUnits: LT.SUBS.CHUNK_UNITS,
+    chunkChars: LT.SUBS.CHUNK_CHARS,
+    scheduleMs: Array.isArray(LT.SUBS.CHUNK_SCHEDULE_SEC)
+      ? LT.SUBS.CHUNK_SCHEDULE_SEC.map((s) => s * 1000)
+      : undefined,
+  });
+  /** 大块补漏时只提取缺失条前后相邻的少量参考，避免把 20 分钟几百条原文再塞一遍。 */
+  function pickNearbyReference(target, missingSet) {
+    if (target.length <= 80) return target.filter((u) => !missingSet.has(u.id));
+    const keep = new Set();
+    for (let i = 0; i < target.length; i++) {
+      if (!missingSet.has(target[i].id)) continue;
+      for (let k = Math.max(0, i - 2); k <= Math.min(target.length - 1, i + 2); k++) {
+        if (!missingSet.has(target[k].id)) keep.add(k);
+      }
+    }
+    return [...keep].sort((a, b) => a - b).slice(0, 40).map((idx) => target[idx]);
+  }
   const settingsHash = (settings) => {
     const config = LT.TextModel.resolve(settings, settings.subsProviderId, settings.subsModel);
     return LT.SubsCache.fingerprint({
@@ -63,6 +82,13 @@ globalThis.LT = globalThis.LT || {};
       this.videoId = videoId;
       this.phase = 'idle'; // idle | reading | downloading | transcribing | translating | ready | partial | error
       this.progress = 0;
+      this.downloadProgress = 0;
+      this.vpsDurationMs = 0;
+      this.vpsDoneDurationMs = 0;
+      this.vpsUsingFallback = false;
+      this.maxOverallProgress = 0;
+      this.translateRetryHint = '';
+      this.streamSegs = null;
       this.stage = '';
       this.sourceKind = '';
       this.asrTotal = 0;
@@ -94,6 +120,69 @@ globalThis.LT = globalThis.LT || {};
     }
 
     // ---------- 对外状态 ----------
+
+    computeOverallProgress() {
+      if (this.phase === 'ready') return 100;
+      if (this.phase === 'idle') return 0;
+      if (this.phase === 'reading') return this.maxOverallProgress;
+
+      if (this.sourceKind === 'vps' && (this.phase === 'downloading' || this.phase === 'transcribing')) {
+        const dlRatio = this.phase === 'downloading'
+          ? Math.max(0, Math.min(1, (Number(this.downloadProgress) || 0) / 100))
+          : 1;
+        let asrRatio = 0;
+        if (this.phase === 'transcribing') {
+          if (this.vpsDurationMs > 0) {
+            asrRatio = Math.max(0, Math.min(1, (this.vpsDoneDurationMs || 0) / this.vpsDurationMs));
+          } else if (this.asrTotal > 0) {
+            asrRatio = Math.max(0, Math.min(1, (this.asrDone || 0) / this.asrTotal));
+          } else {
+            asrRatio = Math.max(0, Math.min(1, (this.progress || 0) / 100));
+          }
+        }
+        let transRatio = 0;
+        if (this.streamSegs && this.streamSegs.size > 0) {
+          const video = this.getVideo();
+          const videoDurMs = video && Number.isFinite(video.duration) && video.duration > 0 ? video.duration * 1000 : 0;
+          const totalDurMs = this.vpsDurationMs > 0 ? this.vpsDurationMs : videoDurMs;
+          if (totalDurMs > 0) {
+            let translatedDurMs = 0;
+            for (const seg of this.streamSegs.values()) {
+              const segDur = Math.max(0, (seg.endMs || 0) - (seg.startMs || 0));
+              if (!segDur) continue;
+              const okCount = seg.texts.reduce((n, t) => n + (typeof t === 'string' && t.trim() ? 1 : 0), 0);
+              translatedDurMs += segDur * (seg.units.length ? okCount / seg.units.length : 1);
+            }
+            transRatio = Math.max(0, Math.min(1, translatedDurMs / totalDurMs));
+          } else if (this.asrTotal > 0) {
+            let doneSegs = 0;
+            for (const seg of this.streamSegs.values()) {
+              const okCount = seg.texts.reduce((n, t) => n + (typeof t === 'string' && t.trim() ? 1 : 0), 0);
+              doneSegs += seg.units.length ? okCount / seg.units.length : 1;
+            }
+            transRatio = Math.max(0, Math.min(1, doneSegs / this.asrTotal));
+          }
+        }
+        const raw = Math.min(99, Math.round(dlRatio * 10 + asrRatio * 55 + transRatio * 35));
+        this.maxOverallProgress = Math.max(this.maxOverallProgress, raw);
+        return this.maxOverallProgress;
+      }
+
+      if (this.units && this.units.length) {
+        if (this.states.length > 0 && this.states.every((s) => s === 'done')) return 100;
+        let translated = 0;
+        for (let i = 0; i < this.units.length; i++) {
+          if (typeof this.texts[i] === 'string' && this.texts[i].trim()) translated++;
+        }
+        const raw = Math.min(99, Math.round((translated / this.units.length) * 100));
+        if (this.phase === 'translating') {
+          this.maxOverallProgress = Math.max(this.maxOverallProgress, raw);
+          return this.maxOverallProgress;
+        }
+        return raw;
+      }
+      return this.maxOverallProgress;
+    }
 
     status() {
       let done = 0;
@@ -132,6 +221,10 @@ globalThis.LT = globalThis.LT || {};
         model: this.meta ? this.meta.model : this.config ? this.config.model : '',
         targetLang: this.meta ? this.meta.targetLang : '',
         progress: this.progress,
+        overallProgress: this.computeOverallProgress(),
+        downloadProgress: this.downloadProgress,
+        usingFallback: this.vpsUsingFallback,
+        translateRetryHint: this.translateRetryHint,
         stage: this.stage,
         sourceKind: this.sourceKind,
         asrTotal: this.asrTotal,
@@ -140,7 +233,7 @@ globalThis.LT = globalThis.LT || {};
     }
 
     emit() {
-      if (this.phase === 'translating' || (this.phase === 'transcribing' && this.units && this.units.length)) {
+      if (this.phase === 'downloading' || this.phase === 'transcribing' || this.phase === 'translating') {
         this.progressNote();
       }
       try {
@@ -155,19 +248,35 @@ globalThis.LT = globalThis.LT || {};
       this.caption.setStatus(text, kind, autoHide);
     }
 
-    progressNote() {
+    progressNote(force = false) {
       const now = Date.now();
-      if (now - this.lastNoteAt < 1000) return;
+      if (!force && now - this.lastNoteAt < 1000) return;
       this.lastNoteAt = now;
       const s = this.status();
+      const pct = s.overallProgress;
       const where = s.frontierIdx >= 0 ? `可看到 ${fmtClock(s.frontierMs)}` : '正在翻译当前位置…';
       let text;
-      if (this.phase === 'transcribing') {
-        const asrPart = this.stage || (this.asrTotal ? `转写 ${this.asrDone}/${this.asrTotal} 段` : `转写 ${this.progress}%`);
-        text = `流译：边转边译 · ${asrPart} · ${where}`;
+      if (this.phase === 'downloading') {
+        const dlText = this.stage || '正在下载音频…';
+        text = pct > 0 ? `流译：${pct}% · ${dlText}` : `流译：${dlText}`;
+      } else if (this.phase === 'transcribing') {
+        if (!this.units || !this.units.length) {
+          const asrInit = this.stage || (this.asrTotal ? `正在转写 ${this.asrDone}/${this.asrTotal} 段` : 'VPS 转写中…');
+          text = `流译：${pct}% · ${asrInit}`;
+        } else {
+          const asrPart = this.asrTotal
+            ? `转写 ${this.asrDone}/${this.asrTotal} 段${this.vpsUsingFallback ? '（备用模型）' : ''}`
+            : (this.stage || `转写 ${this.progress}%`);
+          const transPart = s.total
+            ? `翻译 ${s.done}/${s.total} 块${this.translateRetryHint ? `（${this.translateRetryHint}）` : ''}`
+            : '';
+          text = `流译：${pct}% · ${asrPart}${transPart ? ` · ${transPart}` : ''} · ${where}`;
+        }
       } else {
-        const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
-        text = `流译：整片翻译中 ${pct}% · ${where}`;
+        const transPart = s.total
+          ? `翻译 ${s.done}/${s.total} 块${this.translateRetryHint ? `（${this.translateRetryHint}）` : ''}`
+          : '整片翻译中';
+        text = `流译：${pct}% · ${transPart} · ${where}`;
       }
       if (text !== this.lastNote) this.note(text, 'warn', false);
     }
@@ -334,7 +443,15 @@ globalThis.LT = globalThis.LT || {};
       this.saveError = '';
       this.visible = true;
       this.progress = 0;
+      this.downloadProgress = 0;
+      this.vpsDurationMs = 0;
+      this.vpsDoneDurationMs = 0;
+      this.vpsUsingFallback = false;
+      this.maxOverallProgress = 0;
+      this.translateRetryHint = '';
+      this.streamSegs = null;
       this.stage = '';
+      this.lastNoteAt = 0;
       this.note(settings.videoTranscriptMode === 'youtube' ? '流译：读取字幕轨…' : '流译：正在获取视频原文…', 'warn', false);
       this.emit();
 
@@ -480,6 +597,12 @@ globalThis.LT = globalThis.LT || {};
       this.phase = 'downloading';
       this.stage = '正在连接 VPS 转写服务…';
       this.progress = 0;
+      this.downloadProgress = 0;
+      this.vpsDurationMs = 0;
+      this.vpsDoneDurationMs = 0;
+      this.vpsUsingFallback = false;
+      this.maxOverallProgress = 0;
+      this.translateRetryHint = '';
       this.asrTotal = 0;
       this.asrDone = 0;
       this.sourceKind = 'vps';
@@ -489,10 +612,12 @@ globalThis.LT = globalThis.LT || {};
       this.chunks = [];
       this.states = [];
       this.lastIdx = -2;
+      this.lastNoteAt = 0;
       this.note(`流译：${this.stage}`, 'warn', false);
       this.emit();
 
       const streamSegs = new Map();
+      this.streamSegs = streamSegs;
       let vpsDone = false;
       let waiters = [];
       const wakeWorkers = () => {
@@ -581,7 +706,9 @@ globalThis.LT = globalThis.LT || {};
           try {
             const video = this.getVideo();
             const posMs = video ? video.currentTime * 1000 : 0;
-            const posIdx = LT.SubsScheduler.nextIndexFrom(seg.units, posMs);
+            // 仅当当前播放位置真正落在该分片时间范围内时，才先翻眼前 HEAD_UNITS 条；其他分片整块一次翻完
+            const inSeg = posMs >= (seg.startMs || 0) && posMs < (seg.endMs || 0);
+            const posIdx = inSeg ? LT.SubsScheduler.nextIndexFrom(seg.units, posMs) : -1;
             for (const [from, to] of LT.Chunker.ranges(chunk, posIdx, LT.SUBS.HEAD_UNITS)) {
               await this.translateRangeOn(seg.units, seg.texts, alive, from, to, 0, () => {
                 rebuildTimeline();
@@ -636,6 +763,10 @@ globalThis.LT = globalThis.LT || {};
           context,
           force,
           preferMs,
+          getPreferMs: () => {
+            const v = this.getVideo();
+            return v && Number.isFinite(v.currentTime) ? Math.max(0, Math.round(v.currentTime * 1000)) : 0;
+          },
           signal: vpsController.signal,
           onChunk: chunk => {
             if (!alive() || this.fatal) return;
@@ -646,6 +777,7 @@ globalThis.LT = globalThis.LT || {};
               end: u.end,
               text: u.text,
             }));
+            // 每个 VPS 音频分片（1分/3分/5分/20分）直接作为一块翻译，与切段同频；仅在超安全上限时才拆分
             const segChunks = LT.Chunker.plan(segUnits, {
               chunkUnits: LT.SUBS.CHUNK_UNITS,
               chunkChars: LT.SUBS.CHUNK_CHARS,
@@ -662,6 +794,7 @@ globalThis.LT = globalThis.LT || {};
             this.phase = 'transcribing';
             rebuildTimeline();
             wakeWorkers();
+            this.progressNote(true);
             this.emit();
           },
           onProgress: p => {
@@ -669,19 +802,17 @@ globalThis.LT = globalThis.LT || {};
             const rawPct = Number(p.progress) || 0;
             const pct = rawPct > 0 && rawPct < 1 ? Math.round(rawPct * 100) : Math.round(rawPct);
             this.progress = Math.max(0, Math.min(100, pct));
+            if (p.downloadProgress != null) this.downloadProgress = Math.max(0, Math.min(100, Math.round(Number(p.downloadProgress) || 0)));
+            if (p.durationMs > 0) this.vpsDurationMs = Number(p.durationMs);
+            if (p.doneDurationMs != null && p.doneDurationMs >= 0) this.vpsDoneDurationMs = Number(p.doneDurationMs);
+            if (p.usingFallback != null) this.vpsUsingFallback = !!p.usingFallback;
             this.stage = p.stage || '';
             if (p.totalChunks) this.asrTotal = p.totalChunks;
             if (p.doneChunks != null) this.asrDone = p.doneChunks;
             this.phase = streamSegs.size > 0
               ? 'transcribing'
               : (p.status === 'queued' || p.status === 'downloading' ? 'downloading' : 'transcribing');
-            if (!this.units || !this.units.length) {
-              this.note(
-                `流译：${this.stage || (this.phase === 'downloading' ? 'VPS 下载音频中…' : `VPS 转写中 ${this.progress}%`)}`,
-                'warn',
-                false
-              );
-            }
+            this.progressNote(true);
             this.emit();
           },
         });
@@ -695,6 +826,7 @@ globalThis.LT = globalThis.LT || {};
       }
 
       await workersPromise;
+      this.streamSegs = null;
       if (!alive()) return null;
       if (this.fatal) {
         await this.finish(alive);
@@ -727,6 +859,7 @@ globalThis.LT = globalThis.LT || {};
         });
         if (!alive()) return null;
         this.progress = 100;
+        this.maxOverallProgress = 0;
         this.stage = 'VPS 转写完成';
         this.emit();
         return { units, trackKey, trackLabel, isAsr: false, sourceKind: 'vps' };
@@ -737,10 +870,7 @@ globalThis.LT = globalThis.LT || {};
       const finalUnits = this.units || [];
       if (!finalUnits.length) throw new Error('VPS 转写结果为空');
       const finalTexts = this.texts;
-      const finalChunks = LT.Chunker.plan(finalUnits, {
-        chunkUnits: LT.SUBS.CHUNK_UNITS,
-        chunkChars: LT.SUBS.CHUNK_CHARS,
-      });
+      const finalChunks = planFullChunks(finalUnits);
       const finalStates = finalChunks.map(c => {
         for (let k = c.from; k <= c.to; k++) {
           if (typeof finalTexts[k] !== 'string' || !finalTexts[k].trim()) return 'failed';
@@ -836,7 +966,7 @@ globalThis.LT = globalThis.LT || {};
       });
       const fp = LT.SubsCache.fingerprint({
         seg: LT.SUBS.SEG_VERSION,
-        chunk: [LT.SUBS.CHUNK_UNITS, LT.SUBS.CHUNK_CHARS],
+        chunk: [LT.SUBS.CHUNK_UNITS, LT.SUBS.CHUNK_CHARS, LT.SUBS.CHUNK_SCHEDULE_SEC],
         trackKey,
         sourceHash,
         targetLang: settings.targetLang,
@@ -856,10 +986,7 @@ globalThis.LT = globalThis.LT || {};
         if (!config.model) throw new Error('未填写文字模型名，请在扩展设置的「整片字幕」里填写');
       };
 
-      const chunks = LT.Chunker.plan(units, {
-        chunkUnits: LT.SUBS.CHUNK_UNITS,
-        chunkChars: LT.SUBS.CHUNK_CHARS,
-      });
+      const chunks = planFullChunks(units);
       let cachedChunks = [];
       if (cachedMeta && cachedMeta.fp && cachedMeta.fp !== fp) {
         if (!force && cachedMeta.trackKey === trackKey) {
@@ -1114,49 +1241,50 @@ globalThis.LT = globalThis.LT || {};
     async translateRangeOn(units, texts, alive, from, to, depth = 0, onApplied = () => this.emit()) {
       const target = units.slice(from, to + 1);
       if (target.length === 0) return;
-      let attempt = 0;
+      const maxRetries = Math.max(0, Number(LT.SUBS.MAX_RETRIES ?? (LT.SUBS.MAX_ATTEMPTS - 1)) || 3);
+      let valAttempt = 0;
       for (;;) {
         if (!alive()) throw abortError();
-        await this.waitCooldown(alive);
-        if (!alive()) throw abortError();
         const ctx = LT.Chunker.context(units, from, to, LT.SUBS.CONTEXT_UNITS);
-        let res;
-        try {
-          res = await this.request(LT.Chunker.formatRequest({ before: ctx.before, target, after: ctx.after }));
-        } catch (err) {
-          attempt = await this.retryAfter(err, attempt, alive);
-          continue;
-        }
+        const res = await this.requestWithRetry(
+          LT.Chunker.formatRequest({ before: ctx.before, target, after: ctx.after }),
+          alive
+        );
         if (!alive()) throw abortError();
         const parsed = LT.Chunker.parseResponse(res.text);
         const check = LT.Chunker.validate(parsed.map, target);
         this.applyTo(texts, parsed.map, target, onApplied);
-        if (check.ok) return;
+        let missingUnits = target.filter((u) => texts[u.id - 1] == null);
+        if (missingUnits.length === 0) return;
 
         if (depth < 8 && LT.Chunker.looksTruncated(res.finishReason, check.missing, target)) {
-          if (check.missing.length < target.length) {
-            return this.translateRangeOn(units, texts, alive, to - check.missing.length + 1, to, depth + 1, onApplied);
-          }
-          if (target.length >= LT.SUBS.MIN_SPLIT_UNITS * 2) {
+          let tailCount = 0;
+          for (let i = target.length - 1; i >= 0 && texts[target[i].id - 1] == null; i--) tailCount++;
+          if (tailCount > 0 && tailCount < target.length) {
+            await this.translateRangeOn(units, texts, alive, to - tailCount + 1, to, depth + 1, onApplied);
+            if (!alive()) throw abortError();
+            missingUnits = target.filter((u) => texts[u.id - 1] == null);
+            if (missingUnits.length === 0) return;
+          } else if (missingUnits.length === target.length && target.length >= LT.SUBS.MIN_SPLIT_UNITS * 2) {
             const mid = from + Math.floor(target.length / 2);
             await this.translateRangeOn(units, texts, alive, from, mid - 1, depth + 1, onApplied);
             return this.translateRangeOn(units, texts, alive, mid, to, depth + 1, onApplied);
           }
         }
 
-        const missingSet = new Set(check.missing);
-        const missingUnits = target.filter((u) => missingSet.has(u.id));
+        const missingSet = new Set(missingUnits.map((u) => u.id));
         if (missingUnits.length <= Math.max(3, Math.ceil(target.length * 0.3))) {
           let fixed = false;
           try {
-            const reference = target.filter((u) => !missingSet.has(u.id));
-            const topup = await this.request(
-              LT.Chunker.formatRequest({ before: [...ctx.before, ...reference], target: missingUnits, after: ctx.after })
+            const reference = pickNearbyReference(target, missingSet);
+            const topup = await this.requestWithRetry(
+              LT.Chunker.formatRequest({ before: [...ctx.before, ...reference], target: missingUnits, after: ctx.after }),
+              alive
             );
             if (!alive()) throw abortError();
             const again = LT.Chunker.parseResponse(topup.text);
             this.applyTo(texts, again.map, missingUnits, onApplied);
-            fixed = LT.Chunker.validate(again.map, missingUnits).ok;
+            fixed = missingUnits.every((u) => texts[u.id - 1] != null);
           } catch (err) {
             if (isAbort(err) || (err && err.fatal)) throw err;
           }
@@ -1170,26 +1298,58 @@ globalThis.LT = globalThis.LT || {};
           }
         }
 
-        attempt++;
-        if (attempt >= LT.SUBS.MAX_ATTEMPTS) {
-          throw new Error(`片段 ${target[0].id}-${target[target.length - 1].id} 校验未通过（缺 ${check.missing.length} 条）`);
+        valAttempt++;
+        if (valAttempt > maxRetries) {
+          throw new Error(`片段 ${target[0].id}-${target[target.length - 1].id} 校验未通过（缺 ${missingUnits.length} 条）`);
         }
+        this.translateRetryHint = `校验重试 ${valAttempt}/${maxRetries}`;
+        this.lastNoteAt = 0;
+        this.emit();
         await this.sleep(LT.SUBS.BACKOFF_MS, alive);
       }
     }
 
-    /** 请求出错后决定等多久再试；不该重试的直接抛出。返回新的尝试次数。 */
+    async requestWithRetry(user, alive) {
+      let attempt = 0;
+      for (;;) {
+        if (!alive()) throw abortError();
+        await this.waitCooldown(alive);
+        if (!alive()) throw abortError();
+        try {
+          const res = await this.request(user);
+          if (this.translateRetryHint) {
+            this.translateRetryHint = '';
+            this.lastNoteAt = 0;
+            this.emit();
+          }
+          return res;
+        } catch (err) {
+          attempt = await this.retryAfter(err, attempt, alive);
+        }
+      }
+    }
+
+    /** 请求出错后决定等多久再试（默认最多重试 3 次，429 额外宽限）；致命或取消直接抛出。 */
     async retryAfter(err, attempt, alive) {
       if (!alive() || isAbort(err) || (err && err.fatal)) throw err;
       const next = attempt + 1;
       const status = (err && err.status) || 0;
       const rateLimited = status === 429;
-      const transient = rateLimited || status >= 500 || status === 0;
-      const limit = LT.SUBS.MAX_ATTEMPTS + (rateLimited ? 3 : 0);
-      if (!transient || next >= limit) throw err;
-      const wait = (err && err.retryAfterMs) || LT.SUBS.BACKOFF_MS * Math.pow(2, next - 1);
+      const transient = !!(err && err.retryable) || rateLimited || status === 408 || status === 200 || status >= 500 || status === 0;
+      const maxRetries = Math.max(0, Number(LT.SUBS.MAX_RETRIES ?? (LT.SUBS.MAX_ATTEMPTS - 1)) || 3);
+      const retryLimit = maxRetries + (rateLimited ? 3 : 0);
+      if (!transient || next > retryLimit) {
+        this.translateRetryHint = '';
+        throw err;
+      }
+      const wait = (err && err.retryAfterMs) || Math.min(30000, LT.SUBS.BACKOFF_MS * Math.pow(2, next - 1));
       if (rateLimited) this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + wait);
-      console.warn(`[流译] 请求失败（${err && err.message}），${Math.round(wait / 1000)} 秒后重试`);
+      this.translateRetryHint = rateLimited
+        ? `限流等待 ${Math.max(1, Math.round(wait / 1000))}s`
+        : `重试 ${next}/${retryLimit}`;
+      this.lastNoteAt = 0;
+      this.emit();
+      console.warn(`[流译] 请求失败（${err && err.message}），${Math.round(wait / 1000)} 秒后第 ${next}/${retryLimit} 次重试`);
       await this.sleep(wait, alive);
       return next;
     }

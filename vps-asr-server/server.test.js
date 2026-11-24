@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 
 const { createServer } = require('./server');
-const { extractVideoId, planSegments } = require('./lib/media');
+const { extractVideoId, planSegments, parseDownloadPercent } = require('./lib/media');
 const { mergeAndNormalizeUnits, JobManager } = require('./lib/jobs');
 const gemini = require('./lib/adapters/gemini');
 const openai = require('./lib/adapters/openai-audio');
@@ -475,6 +475,162 @@ test('异步边切边转与增量 afterSeq 查询：首段切完立刻转写并�
       { startMs: 1000, endMs: 3000, text: '第0段台词' },
       { startMs: 61000, endMs: 63000, text: '第1段台词' }
     ]);
+  } finally {
+    server.close();
+  }
+});
+
+test('planSegments 默认渐进分段 [60, 180, 300, 1200]：2 小时 17 分视频从片头与片中均无缝覆盖', () => {
+  const dur = 8220000; // 2h 17m
+  const p0 = planSegments(dur, { preferMs: 0 });
+  assert.deepEqual(p0.scheduleSeconds, [60, 180, 300, 1200]);
+  assert.equal(p0.segments.length, 10);
+  assert.deepEqual(
+    p0.segments.map(s => s.durationMs / 1000),
+    [60, 180, 300, 1200, 1200, 1200, 1200, 1200, 1200, 480]
+  );
+  assert.deepEqual(p0.priorityOrder, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+  // 从第 40 分钟（2400s）开始：前 40 分钟按 20m×2 切，40 分钟起按 1m→3m→5m→20m... 切且优先执行
+  const pMid = planSegments(dur, { preferMs: 2400000 });
+  assert.equal(pMid.segments.length, 10);
+  assert.equal(pMid.segments[0].durationMs, 1200000);
+  assert.equal(pMid.segments[1].durationMs, 1200000);
+  assert.equal(pMid.segments[2].startMs, 2400000);
+  assert.equal(pMid.segments[2].durationMs, 60000);
+  assert.equal(pMid.segments[3].durationMs, 180000);
+  assert.equal(pMid.segments[4].durationMs, 300000);
+  assert.equal(pMid.segments[5].durationMs, 1200000);
+  assert.deepEqual(pMid.priorityOrder, [2, 3, 4, 5, 6, 7, 8, 9, 0, 1]);
+  for (let i = 1; i < pMid.segments.length; i++) {
+    assert.equal(pMid.segments[i].startMs, pMid.segments[i - 1].endMs);
+  }
+  assert.equal(pMid.segments.at(-1).endMs, dur);
+});
+
+test('parseDownloadPercent 解析 yt-dlp 百分比输出', () => {
+  assert.equal(parseDownloadPercent('[download]  42.6% of ~24.50MiB at 3.2MiB/s ETA 00:04'), 43);
+  assert.equal(parseDownloadPercent('[download] 100% of 24.50MiB in 00:07'), 100);
+  assert.equal(parseDownloadPercent('[youtube] Extracting URL'), null);
+});
+
+test('跨任务共享 90 秒冷却表，且结构化日志记录完整并绝不泄露密钥', async () => {
+  const calls = [];
+  const logs = [];
+  registerAdapter('shared-cd-limited', {
+    async transcribeChunk({ modelConfig }) {
+      calls.push(modelConfig.id);
+      const err = new Error('429 too many');
+      err.status = 429;
+      throw err;
+    }
+  });
+  registerAdapter('shared-cd-ok', {
+    async transcribeChunk({ modelConfig }) {
+      calls.push(modelConfig.id);
+      return [{ startMs: 0, endMs: 1000, text: 'ok' }];
+    }
+  });
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'asr-cd-'));
+  const primary = { id: 'p-secret', provider: 'shared-cd-limited', apiKey: 'SUPER_SECRET_KEY_123', enabled: true, fallback: ['b-ok'] };
+  const backup = { id: 'b-ok', provider: 'shared-cd-ok', apiKey: 'BACKUP_SECRET_456', enabled: true };
+  const manager = new JobManager(
+    { cacheDir: dir, chunkConcurrency: 1, maxRetries: 0, models: [primary, backup] },
+    {
+      logger: (event, fields) => logs.push({ event, fields }),
+      prepareChunks: async () => ({
+        chunks: [{ audioBuffer: Buffer.from('a'), offsetMs: 0, durationMs: 10000, mimeType: 'audio/mpeg' }]
+      })
+    }
+  );
+
+  // 任务 1 触发 primary 429 并切 backup
+  const r1 = await manager.create({ videoId: 'video111111', sourceLang: 'ja', modelConfig: primary });
+  for (let i = 0; i < 60 && r1.job.status !== 'done'; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(r1.job.status, 'done');
+
+  // 紧接着任务 2（不同视频）直接复用冷却表，不再撞 primary！
+  const r2 = await manager.create({ videoId: 'video222222', sourceLang: 'ja', modelConfig: primary });
+  for (let i = 0; i < 60 && r2.job.status !== 'done'; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(r2.job.status, 'done');
+
+  assert.deepEqual(calls, ['p-secret', 'b-ok', 'b-ok']);
+  assert.ok(logs.some(l => l.event === 'job.start'));
+  assert.ok(logs.some(l => l.event === 'job.chunk_fallback' && l.fields.reason === 429));
+  assert.ok(logs.some(l => l.event === 'job.chunk_fallback' && l.fields.reason === 'cooldown'));
+  assert.ok(logs.some(l => l.event === 'job.chunk_done' && l.fields.model === 'b-ok'));
+  assert.ok(logs.some(l => l.event === 'job.done'));
+  const serialized = JSON.stringify(logs);
+  assert.equal(serialized.includes('SUPER_SECRET_KEY_123'), false);
+  assert.equal(serialized.includes('BACKUP_SECRET_456'), false);
+});
+
+test('GET /api/jobs/:id?preferMs=... 支持中途拖动进度条动态提权（含落在大段中间）并上报下载与时长进度', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'asr-seek-'));
+  let releaseFirst;
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+  const order = [];
+
+  registerAdapter('test-seek', {
+    async transcribeChunk({ index }) {
+      order.push(index);
+      if (index === 0) await firstGate;
+      return [{ startMs: 0, endMs: 1000, text: `seg-${index}` }];
+    }
+  });
+
+  const { server } = createServer({
+    config: {
+      cacheDir: dir,
+      defaultModel: 'seek',
+      chunkScheduleSeconds: [60, 180, 300, 1200],
+      cutConcurrency: 1,
+      chunkConcurrency: 1,
+      maxRetries: 0,
+      models: [{ id: 'seek', label: 'Seek', provider: 'test-seek', enabled: true }]
+    },
+    logger: null,
+    downloadAudio: async ({ videoId, onDownloadProgress }) => {
+      onDownloadProgress?.(55);
+      onDownloadProgress?.(100);
+      return {
+        videoId,
+        tempDir: dir,
+        inputPath: path.join(dir, 'fake.m4a'),
+        // 4 段：[0..60s], [60..240s], [240..540s], [540..1740s]
+        durationMs: 1740000,
+        cleanup: async () => {}
+      };
+    },
+    cutSegment: async ({ index, startMs, durationMs }) => ({
+      index, audioBuffer: Buffer.from('mp3'), offsetMs: startMs, durationMs, mimeType: 'audio/mpeg'
+    })
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+  const port = server.address().port;
+  try {
+    const created = await request(port, 'POST', '/api/transcribe', { videoId: 'seek1234567', model: 'seek', preferMs: 0 });
+    const jobId = created.body.jobId;
+    for (let i = 0; i < 40 && order.length === 0; i++) await new Promise(r => setTimeout(r, 10));
+
+    // 用户拖到第 15 分钟（900000ms），正好落在第 3 段 [540s..1740s] 中间
+    const mid = await request(port, 'GET', `/api/jobs/${jobId}?afterSeq=0&preferMs=900000`);
+    assert.equal(mid.body.durationMs, 1740000);
+    assert.equal(mid.body.downloadProgress, 100);
+
+    releaseFirst();
+    let finalSnap;
+    for (let i = 0; i < 60; i++) {
+      finalSnap = await request(port, 'GET', `/api/jobs/${jobId}`);
+      if (finalSnap.body.status === 'done') break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    assert.equal(finalSnap.body.status, 'done');
+    assert.equal(finalSnap.body.doneDurationMs, 1740000);
+    // 第 0 段正在执行；放行后下一段必须立刻切第 3 段（含 900s），再补第 1、2 段！
+    assert.deepEqual(order, [0, 3, 1, 2]);
   } finally {
     server.close();
   }

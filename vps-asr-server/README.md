@@ -20,7 +20,10 @@ cp config.example.json config.json
    - `authToken`：强烈建议设置一串随机令牌，扩展设置页填入相同令牌（请求头 `Authorization: Bearer <token>`）。
    - `defaultModel`：扩展选「使用后端默认」时采用的模型 ID。
    - `models`：数组中每个 `enabled: true` 的条目都会通过 `/health` 和 `/api/models` 暴露给扩展前端选择。
-   - `headChunkSeconds`、`chunkSeconds`、`cutConcurrency`、`chunkConcurrency` 控制首段长度、常规分片长度及切段和转写并发度。`ytDlpFormat` 可降低长视频下载码率。
+   - `chunkScheduleSeconds`：渐进分片时长数组（单位秒，默认 `[60, 180, 300, 1200]`，即 1 分 → 3 分 → 5 分 → 后续每段 20 分钟；仍兼容旧的 `headChunkSeconds` / `chunkSeconds`）。
+   - `cutConcurrency`、`chunkConcurrency`、`maxRetries` 控制切段与转写并发度及单模型重试次数；`ytDlpFormat` 可降低长视频下载码率。
+   - 模型条目支持可选 `fallback: ["backup-model-id"]`：遇到 HTTP 429 时立即切换备用模型并让原模型在全服务内冷却 90 秒（跨任务共享）。
+   - 服务向标准输出打印单行脱敏结构化日志（`job.start`、`job.download_done`、`job.chunk_done`、`job.chunk_fallback`、`job.chunk_retry`、`job.done` 等，不含密钥与原文），可直接用 `journalctl -u <service> -f` 查看。
 
 3. 启动服务：
 
@@ -87,7 +90,7 @@ async function transcribeChunk({ audioBuffer, mimeType, durationMs, sourceLang, 
 | `GET /health` | 健康检查，同时返回 `defaultModel` 与启用的 `models` 清单（不含密钥） |
 | `GET /api/models` | 返回 `defaultModel` 与启用的 `models` 清单 |
 | `POST /api/transcribe` | 提交转写 `{ videoId 或 url, sourceLang, model, context, force, preferMs }`；命中缓存返回 `200 + units`，新任务返回 `202 + jobId` |
-| `GET /api/jobs/:jobId?afterSeq=N` | 查询状态及 `totalChunks`、`doneChunks`、`seq`。`chunks` 返回序号大于 N 的已完成分片，任务完成时 `units` 返回完整结果 |
+| `GET /api/jobs/:jobId?afterSeq=N&preferMs=M` | 查询状态及 `totalChunks`、`doneChunks`、`durationMs`、`doneDurationMs`、`downloadProgress`、`seq`。传入 `preferMs` 可在播放拖动时动态提权尚未开始的对应分片；`chunks` 返回序号大于 N 的已完成分片，完成时 `units` 返回完整结果 |
 | `POST /api/jobs/:jobId/cancel` | 取消进行中的任务 |
 
 ## Docker / systemd 部署示例

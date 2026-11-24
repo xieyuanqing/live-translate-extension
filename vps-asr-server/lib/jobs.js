@@ -14,6 +14,21 @@ function safeKeyPart(value) {
   return String(value).replace(/[^A-Za-z0-9_.-]/g, '_');
 }
 
+function formatLogValue(value) {
+  if (Array.isArray(value)) return `[${value.join(',')}]`;
+  const text = String(value).replace(/[\r\n]+/g, ' ').trim();
+  return /\s/.test(text) ? JSON.stringify(text) : text;
+}
+
+function defaultLogger(event, fields = {}) {
+  const parts = [`[liuyi-asr]`, new Date().toISOString(), event];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null || value === '') continue;
+    parts.push(`${key}=${formatLogValue(value)}`);
+  }
+  console.log(parts.join(' '));
+}
+
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -84,11 +99,16 @@ class JobManager {
     this.cacheDir = config.cacheDir || path.join(__dirname, '..', 'cache');
     this.jobs = new Map();
     this.active = new Map();
+    // 跨任务共享 429 冷却表，避免连续打开新视频时反复撞限流模型
+    this.cooldown = new Map();
     this.customPrepareChunks = options.prepareChunks || null;
     this.downloadAudio = options.downloadAudio || downloadAudio;
     this.cutSegment = options.cutSegment || cutSegment;
     this.cutAllFallback = options.cutAllFallback || cutAllFallback;
     this.prepareChunks = options.prepareChunks || prepareChunks;
+    this.log = options.logger === null || options.logger === false
+      ? () => {}
+      : (typeof options.logger === 'function' ? options.logger : defaultLogger);
   }
 
   key(videoId, lang, modelId) {
@@ -128,9 +148,14 @@ class JobManager {
       videoId,
       lang,
       model: modelConfig.id,
+      activeModel: modelConfig.id,
+      usingFallback: false,
       provider: modelConfig.provider,
       status,
       progress: status === 'done' ? 100 : 0,
+      downloadProgress: status === 'done' ? 100 : 0,
+      durationMs: 0,
+      doneDurationMs: 0,
       stage: status === 'done' ? '命中服务端缓存' : '已加入队列',
       units,
       totalChunks: 0,
@@ -139,6 +164,7 @@ class JobManager {
       readyChunks: [],
       error: '',
       key: cacheKey,
+      lastPreferMs: 0,
       controller: new AbortController()
     };
     this.jobs.set(job.jobId, job);
@@ -153,6 +179,7 @@ class JobManager {
     if (!force) {
       const cached = await this.readCache(cacheKey);
       if (cached && Array.isArray(cached.units)) {
+        this.log('job.cache_hit', { videoId, model: modelConfig.id, lang, units: cached.units.length });
         return {
           cached: true,
           job: this.makeJob(videoId, lang, modelConfig, cached.units, cacheKey, 'done')
@@ -170,8 +197,9 @@ class JobManager {
     }
 
     const job = this.makeJob(videoId, lang, modelConfig, [], cacheKey, 'queued');
+    job.lastPreferMs = preferMs;
     this.active.set(cacheKey, job.jobId);
-    this.run(job, { videoId, url, sourceLang: lang, modelConfig, context, preferMs });
+    this.run(job, { videoId, url, sourceLang: lang, modelConfig, context, preferMs, force });
     return { cached: false, job };
   }
 
@@ -187,13 +215,21 @@ class JobManager {
   }
 
   // 429 立即换下一个候选并让该模型冷却；5xx/网络错误按 5s、10s 退避重试后再换
-  async transcribeWithFallback(chunk, args, signal, cooldown) {
+  async transcribeWithFallback(chunk, args, signal, hooks = {}) {
     const maxRetries = Math.max(0, Number(this.config.maxRetries ?? 2));
     const models = this.candidates(args.modelConfig);
     let lastError = null;
+    let skippedByCooldown = false;
     for (const [index, modelConfig] of models.entries()) {
       const isLastModel = index === models.length - 1;
-      if (!isLastModel && (cooldown.get(modelConfig.id) || 0) > Date.now()) continue;
+      if (!isLastModel && (this.cooldown.get(modelConfig.id) || 0) > Date.now()) {
+        skippedByCooldown = true;
+        continue;
+      }
+      if (index > 0 && skippedByCooldown) {
+        skippedByCooldown = false;
+        hooks.onFallback?.(args.modelConfig.id, modelConfig.id, 'cooldown');
+      }
       const adapter = getAdapter(modelConfig.provider);
       if (!adapter) {
         lastError = new Error(`未注册转写适配器：${modelConfig.provider}`);
@@ -202,23 +238,35 @@ class JobManager {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (signal.aborted) throw new Error('任务已取消');
         try {
-          return await adapter.transcribeChunk({
+          const rows = await adapter.transcribeChunk({
             ...chunk,
             sourceLang: args.sourceLang,
             context: args.context,
             modelConfig,
             signal
           });
+          return { rows, modelId: modelConfig.id, usedFallback: index > 0 };
         } catch (err) {
           lastError = err;
           if (signal.aborted) throw err;
           if (NON_RETRYABLE_STATUS.has(err.status)) break;
           if (err.status === 429) {
-            cooldown.set(modelConfig.id, Date.now() + RATE_LIMIT_COOLDOWN_MS);
-            if (!isLastModel) break;
+            this.cooldown.set(modelConfig.id, Date.now() + RATE_LIMIT_COOLDOWN_MS);
+            if (!isLastModel) {
+              const nextModel = models[index + 1];
+              hooks.onFallback?.(modelConfig.id, nextModel?.id || '', 429);
+              break;
+            }
           }
-          if (attempt >= maxRetries) break;
+          if (attempt >= maxRetries) {
+            if (!isLastModel) {
+              const nextModel = models[index + 1];
+              hooks.onFallback?.(modelConfig.id, nextModel?.id || '', err.status || 'error');
+            }
+            break;
+          }
           const backoff = err.status === 429 || err.status >= 500 ? 5000 * (attempt + 1) : 1000 * (attempt + 1);
+          hooks.onRetry?.(modelConfig.id, attempt + 1, maxRetries, err.status || 0, backoff);
           await sleep(backoff, signal);
         }
       }
@@ -229,18 +277,31 @@ class JobManager {
   async run(job, args) {
     const controller = job.controller;
     const signal = controller.signal;
-    const cooldown = new Map();
+    const shortId = job.jobId.slice(0, 8);
+    const jobStartedAt = Date.now();
     const concurrency = Math.max(1, Number(this.config.chunkConcurrency) || 4);
     const cutConcurrency = Math.max(1, Number(this.config.cutConcurrency) || 2);
     const withCutLimit = createSemaphore(cutConcurrency);
     let descriptor = null;
 
+    this.log('job.start', {
+      job: shortId,
+      videoId: args.videoId,
+      model: args.modelConfig.id,
+      lang: args.sourceLang,
+      preferMs: args.preferMs || 0,
+      force: args.force ? 1 : 0
+    });
+
     try {
       job.status = 'downloading';
+      job.downloadProgress = 0;
       job.stage = '正在下载音频';
 
       let queue = [];
       let needsCut = false;
+      let scheduleSeconds = [];
+      const downloadStartedAt = Date.now();
 
       if (this.customPrepareChunks) {
         const prepared = await this.customPrepareChunks({
@@ -249,6 +310,11 @@ class JobManager {
           signal,
           onStage: stage => {
             if (!signal.aborted) job.stage = stage;
+          },
+          onDownloadProgress: pct => {
+            if (signal.aborted) return;
+            job.downloadProgress = pct;
+            job.stage = pct >= 100 ? '音频下载完成，准备切段' : `正在下载音频 ${pct}%`;
           }
         });
         queue = (prepared.chunks || []).map((chunk, idx) => ({
@@ -256,6 +322,8 @@ class JobManager {
           index: Number.isInteger(chunk.index) ? chunk.index : idx,
           startMs: chunk.offsetMs ?? chunk.startMs ?? 0
         }));
+        job.durationMs = queue.reduce((sum, item) => sum + Math.max(0, Number(item.durationMs) || 0), 0);
+        job.downloadProgress = 100;
       } else {
         descriptor = await this.downloadAudio({
           ...args,
@@ -263,17 +331,26 @@ class JobManager {
           signal,
           onStage: stage => {
             if (!signal.aborted) job.stage = stage;
+          },
+          onDownloadProgress: pct => {
+            if (signal.aborted) return;
+            job.downloadProgress = pct;
+            job.stage = pct >= 100 ? '音频下载完成，准备切段' : `正在下载音频 ${pct}%`;
           }
         });
         if (signal.aborted) throw new Error('任务已取消');
+        job.downloadProgress = 100;
+        job.durationMs = Math.max(0, Number(descriptor.durationMs) || 0);
 
         if (descriptor.durationMs > 0) {
           const plan = planSegments(descriptor.durationMs, {
+            chunkScheduleSeconds: this.config.chunkScheduleSeconds,
             headChunkSeconds: this.config.headChunkSeconds,
             chunkSeconds: this.config.chunkSeconds,
             preferMs: args.preferMs
           });
           queue = plan.priorityOrder.map(i => plan.segments[i]);
+          scheduleSeconds = plan.scheduleSeconds || [];
           needsCut = true;
         } else {
           queue = await this.cutAllFallback({
@@ -282,7 +359,17 @@ class JobManager {
             config: this.config,
             signal
           });
+          job.durationMs = queue.reduce((sum, item) => sum + Math.max(0, Number(item.durationMs) || 0), 0);
         }
+
+        this.log('job.download_done', {
+          job: shortId,
+          videoId: args.videoId,
+          durationSec: Math.round(job.durationMs / 1000),
+          segments: queue.length,
+          schedule: scheduleSeconds.length ? scheduleSeconds : undefined,
+          ms: Date.now() - downloadStartedAt
+        });
       }
 
       if (signal.aborted) throw new Error('任务已取消');
@@ -292,25 +379,34 @@ class JobManager {
       }
 
       const total = queue.length;
+      let done = 0;
+      const formatStage = note => {
+        if (!total) return '无音频分片';
+        const suffix = note || (job.usingFallback ? '备用模型' : '');
+        return suffix ? `正在转写 ${done}/${total} 段（${suffix}）` : `正在转写 ${done}/${total} 段`;
+      };
+
       job.totalChunks = total;
       job.status = 'transcribing';
-      job.stage = total ? `正在转写 0/${total} 段` : '无音频分片';
+      job.stage = formatStage();
 
-      // 支持中途收到新的 preferMs 时把尚未开始的分片按距离重排
+      // 支持中途收到新的 preferMs 时把尚未开始的分片按距离重排：含当前位置最先，其次向后，最后回头补
       job.reprioritize = targetMs => {
+        const ms = Math.max(0, Math.round(Number(targetMs) || 0));
+        job.lastPreferMs = ms;
         if (!queue.length) return;
-        queue.sort((a, b) => {
-          const aStart = a.startMs ?? a.offsetMs ?? 0;
-          const bStart = b.startMs ?? b.offsetMs ?? 0;
-          const aFwd = aStart >= targetMs ? 0 : 1;
-          const bFwd = bStart >= targetMs ? 0 : 1;
-          if (aFwd !== bFwd) return aFwd - bFwd;
-          return aStart - bStart;
-        });
+        const rank = seg => {
+          const s = seg.startMs ?? seg.offsetMs ?? 0;
+          const e = seg.endMs ?? (s + (seg.durationMs ?? 0));
+          if (ms >= s && ms < e) return -1;
+          if (s >= ms) return s - ms;
+          return 1e12 + s;
+        };
+        queue.sort((a, b) => rank(a) - rank(b));
+        this.log('job.reprioritize', { job: shortId, preferMs: ms, nextSeg: queue[0]?.index });
       };
 
       const collected = [];
-      let done = 0;
 
       const worker = async () => {
         while (queue.length) {
@@ -318,6 +414,7 @@ class JobManager {
           const seg = queue.shift();
           if (!seg) break;
 
+          const cutStartedAt = Date.now();
           const actual = needsCut
             ? await withCutLimit(() =>
                 this.cutSegment({
@@ -331,20 +428,47 @@ class JobManager {
                 })
               )
             : seg;
+          const cutMs = needsCut ? Date.now() - cutStartedAt : 0;
 
           if (signal.aborted) throw new Error('任务已取消');
 
           const segOffset = actual.offsetMs ?? seg.startMs ?? 0;
           const segDuration = actual.durationMs ?? seg.durationMs ?? 0;
           let chunkRows = [];
+          let hitModel = args.modelConfig.id;
+          let asrMs = 0;
+
           if (actual.audioBuffer && actual.audioBuffer.length > 0) {
-            const rows = await this.transcribeWithFallback(
+            const asrStartedAt = Date.now();
+            const result = await this.transcribeWithFallback(
               { ...actual, offsetMs: segOffset, durationMs: segDuration },
               args,
               signal,
-              cooldown
+              {
+                onFallback: (fromId, toId, reason) => {
+                  job.usingFallback = Boolean(toId && toId !== args.modelConfig.id);
+                  if (toId) job.activeModel = toId;
+                  if (job.status === 'transcribing') job.stage = formatStage();
+                  this.log('job.chunk_fallback', { job: shortId, seg: seg.index, from: fromId, to: toId, reason });
+                },
+                onRetry: (modelId, attempt, maxRetries, status, backoffMs) => {
+                  if (job.status === 'transcribing') job.stage = formatStage(`重试 ${attempt}/${maxRetries}`);
+                  this.log('job.chunk_retry', {
+                    job: shortId,
+                    seg: seg.index,
+                    model: modelId,
+                    attempt: `${attempt}/${maxRetries}`,
+                    status,
+                    backoffMs
+                  });
+                }
+              }
             );
-            chunkRows = (rows || []).map(row => ({
+            asrMs = Date.now() - asrStartedAt;
+            hitModel = result.modelId;
+            job.activeModel = hitModel;
+            job.usingFallback = result.usedFallback;
+            chunkRows = (result.rows || []).map(row => ({
               startMs: segOffset + row.startMs,
               endMs: segOffset + row.endMs,
               text: row.text
@@ -355,6 +479,7 @@ class JobManager {
           collected.push(...readyUnits);
           done += 1;
           job.doneChunks = done;
+          job.doneDurationMs += Math.max(0, segDuration);
           job.readyChunks.push({
             seq: ++job.seq,
             index: seg.index,
@@ -362,8 +487,21 @@ class JobManager {
             endMs: segOffset + segDuration,
             units: readyUnits
           });
-          job.progress = total ? Math.min(99, Math.round((done / total) * 100)) : 100;
-          job.stage = `正在转写 ${done}/${total} 段`;
+          job.progress = job.durationMs > 0
+            ? Math.min(99, Math.round((job.doneDurationMs / job.durationMs) * 100))
+            : (total ? Math.min(99, Math.round((done / total) * 100)) : 100);
+          job.stage = formatStage();
+
+          this.log('job.chunk_done', {
+            job: shortId,
+            seg: seg.index,
+            done: `${done}/${total}`,
+            model: hitModel,
+            cutMs,
+            asrMs,
+            units: readyUnits.length,
+            bytes: actual.audioBuffer ? actual.audioBuffer.length : 0
+          });
         }
       };
 
@@ -381,15 +519,35 @@ class JobManager {
       job.status = 'done';
       job.progress = 100;
       job.stage = '转写完成';
+      this.log('job.done', {
+        job: shortId,
+        videoId: args.videoId,
+        model: job.activeModel,
+        chunks: total,
+        units: units.length,
+        totalMs: Date.now() - jobStartedAt
+      });
     } catch (err) {
       if (signal.aborted) {
         job.status = 'cancelled';
         job.error = '';
         job.stage = '已取消';
+        this.log('job.cancelled', {
+          job: shortId,
+          videoId: args.videoId,
+          done: `${job.doneChunks}/${job.totalChunks}`,
+          totalMs: Date.now() - jobStartedAt
+        });
       } else {
         job.status = 'error';
         job.error = err?.message || String(err);
         job.stage = '转写失败';
+        this.log('job.error', {
+          job: shortId,
+          videoId: args.videoId,
+          error: String(job.error).slice(0, 200),
+          totalMs: Date.now() - jobStartedAt
+        });
       }
     } finally {
       delete job.reprioritize;
@@ -418,4 +576,4 @@ class JobManager {
   }
 }
 
-module.exports = { JobManager, mergeAndNormalizeUnits };
+module.exports = { JobManager, mergeAndNormalizeUnits, defaultLogger };

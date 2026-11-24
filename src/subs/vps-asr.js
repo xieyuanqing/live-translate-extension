@@ -193,6 +193,7 @@ globalThis.LT = globalThis.LT || {};
     context,
     force,
     preferMs,
+    getPreferMs,
     signal,
     onProgress,
     onChunk,
@@ -261,6 +262,7 @@ globalThis.LT = globalThis.LT || {};
     const started = Date.now();
     let disconnects = 0;
     let firstPoll = true;
+    let lastReportedPreferMs = Number.isFinite(preferMs) && preferMs > 0 ? Math.round(preferMs) : 0;
     while (Date.now() - started < maxWaitMs) {
       if (signal?.aborted) {
         notifyCancel();
@@ -277,7 +279,16 @@ globalThis.LT = globalThis.LT || {};
       firstPoll = false;
 
       try {
-        const query = lastSeq > 0 ? `?afterSeq=${lastSeq}` : '';
+        const params = [];
+        if (lastSeq > 0) params.push(`afterSeq=${lastSeq}`);
+        if (typeof getPreferMs === 'function') {
+          const curMs = Math.max(0, Math.round(Number(getPreferMs()) || 0));
+          if (Math.abs(curMs - lastReportedPreferMs) >= 15000) {
+            lastReportedPreferMs = curMs;
+            params.push(`preferMs=${curMs}`);
+          }
+        }
+        const query = params.length ? `?${params.join('&')}` : '';
         const polled = await request(base, `/api/jobs/${encodeURIComponent(jobId)}${query}`, {
           method: 'GET',
           headers,
@@ -303,8 +314,13 @@ globalThis.LT = globalThis.LT || {};
       const progressInfo = {
         status: data.status || '',
         progress: Number(data.progress || 0),
+        downloadProgress: Number(data.downloadProgress || 0),
+        durationMs: Number(data.durationMs || 0),
+        doneDurationMs: Number(data.doneDurationMs || 0),
         stage: data.stage || '',
         model: data.model || model || '',
+        activeModel: data.activeModel || data.model || model || '',
+        usingFallback: Boolean(data.usingFallback),
         provider: data.provider || '',
         lang: data.lang || sourceLang || '',
         totalChunks: Number(data.totalChunks || 0),
